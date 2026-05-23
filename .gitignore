@@ -1,0 +1,11 @@
+# Сборка
+build/
+
+# Логи и БД
+logs/
+*.log
+*.db
+*.db-journal
+
+# IDE
+.vscode/
