@@ -13,9 +13,9 @@ Logger::Logger() {
         fs::create_directories(LOG_DIR);
     }
 
-    // Открываем файл, перезаписывая его — один файл на сессию
+    // Открываем файл, дозаписывая в него
     std::string fullPath = std::string(LOG_DIR) + "/" + LOG_FILE;
-    logFile.open(fullPath, std::ios::trunc);
+    logFile.open(fullPath, std::ios::app);
 
     if (!logFile.is_open()) {
         std::cerr << "[Логгер] CRITICAL: Невозможно открыть файл для логов: " << fullPath << std::endl;

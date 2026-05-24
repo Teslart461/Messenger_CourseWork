@@ -8,9 +8,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Пути к заголовочным файлам
 include_directories(include)
 
-# Создаем папку для логов
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/logs)
-
 # Для работы с потоками
 find_package(Threads REQUIRED)
 
@@ -21,6 +18,7 @@ find_package(SQLite3 REQUIRED)
 add_executable(server
     src/server/main.cpp
     src/common/Logger.cpp
+    src/server/DataBaseManager.cpp
 )
 target_link_libraries(server Threads::Threads)
 
