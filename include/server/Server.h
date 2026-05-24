@@ -8,6 +8,7 @@ class Server {
 private:
     int serverSocket; // Файловый дескриптор главного сокета
     uint16_t port; // Порт, на котором сервер будет слушать входящие соединения
+    bool isRunning; // Флаг для контроля работы сервера
     
 public:
     /**

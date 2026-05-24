@@ -10,7 +10,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-Server::Server(uint16_t port) : port(port), serverSocket(-1) {}
+Server::Server(uint16_t port) : port(port), serverSocket(-1), isRunning(false) {}
 
 Server::~Server() {
     stop();
@@ -19,7 +19,7 @@ Server::~Server() {
 // Метод для запуска сервера: создание сокета, привязка и прослушивание
 void Server::start() {
     // Создаем TCP сокет, где
-    // AF_INET - используем IPv4
+    // AF_INET - IPv4
     // SOCK_STREAM - используем протокол TCP
     // 0 - IP-протокол по умолчанию
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -50,6 +50,11 @@ void Server::start() {
     // Привязываем сокет к адресу и порту
     if (bind(serverSocket, (sockaddr*)(&serverAddress), sizeof(serverAddress)) < 0) {
         Logger::getInstance().log("Ошибка привязки (bind)" + std::to_string(port), LogLevel::ERROR);
+
+        // Закрываем сокет, если привязка не удалась
+        close(serverSocket);
+        serverSocket = -1;
+
         return;
     }
 
@@ -61,45 +66,56 @@ void Server::start() {
     }
 
     Logger::getInstance().log("Сервер успешно запущен. Ожидание подключений на порту " + std::to_string(port) + "...", LogLevel::INFO);
+    isRunning = true;
 
-    // Ожидаем клиента
-    sockaddr_in clientAddress{};
-    socklen_t clientSize = sizeof(clientAddress);
+    // Бесконечный цикл для принятия клиентов (accept)
+    while (isRunning) {
+        sockaddr_in clientAddress{};
+        socklen_t clientSize = sizeof(clientAddress);
 
-    // accept блокирует программу, пока кто-нибудь не подключится по сети
-    int clientSocket = accept(serverSocket, (sockaddr*)(&clientAddress), &clientSize);
+        // accept блокирует программу, пока кто-нибудь не подключится по сети
+        int clientSocket = accept(serverSocket, (sockaddr*)(&clientAddress), &clientSize);
         
-    if (clientSocket < 0) {
-        Logger::getInstance().log("Ошибка при принятии подключения (accept)", LogLevel::ERROR);
-    }
+        if (clientSocket < 0) {
+            if (isRunning) { // Если сервер всё ещё работает, логируем ошибку
+                Logger::getInstance().log("Ошибка при принятии подключения (accept)", LogLevel::ERROR);
+            }
+            continue;
+        }
 
-    Logger::getInstance().log("Клиент пожключился!", LogLevel::INFO);
+        Logger::getInstance().log("Клиент подключился!", LogLevel::INFO);
          
-    // Буфер для получения данных от клиента
-    char buffer[1024] = {0};
+        // Посылаем приветственное сообщение клиенту
+        std::string welcomeMsg = "Привет от C++ сервера!\n";
+        send(clientSocket, welcomeMsg.c_str(), welcomeMsg.length(), 0);
 
-    // recv - получает данные от клиента, блокирует программу, пока не придут данные
-    ssize_t bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
+        // Буфер для получения данных от клиента
+        char buffer[1024] = {0};
 
-    // Проверяем, что данные были получены
-    if (bytesReceived > 0) {
-        std::string message(buffer, bytesReceived);
+        // recv - получает данные от клиента, блокирует программу, пока не придут данные
+        ssize_t bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
 
-        Logger::getInstance().log("Получено сообщение: " + message, LogLevel::INFO);
+        // Проверяем, что данные были получены
+        if (bytesReceived > 0) {
+            std::string message(buffer, bytesReceived);
 
-        std::cout << "Получено: " << message << std::endl;
-    }
+            Logger::getInstance().log("Получено сообщение: " + message, LogLevel::INFO);
 
-    // Ещё поздороваемся с клиентом
-    std::string welcomeMsg = "Привет от C++ сервера!\n";
-    send(clientSocket, welcomeMsg.c_str(), welcomeMsg.length(), 0);
+            std::cout << "Получено: " << message << std::endl;
+        }
 
-    close(clientSocket);
+        close(clientSocket);
+    }   
 }
 
 void Server::stop() {
-    if (serverSocket != -1) {
-        close(serverSocket);
+    if (isRunning) {
+        isRunning = false;
+        // Закрываем главный сокет сервера
+        if (serverSocket != -1) {
+            close(serverSocket); // close - закрывает файловый дескриптор сокета
+            serverSocket = -1;
+        }
         Logger::getInstance().log("Сервер остановлен", LogLevel::INFO);
     }
 }

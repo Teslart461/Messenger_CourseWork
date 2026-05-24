@@ -27,6 +27,7 @@ target_link_libraries(server Threads::Threads)
 add_executable(client
     src/client/main.cpp
     src/common/Logger.cpp
+    src/client/Client.cpp
 )
 target_link_libraries(client Threads::Threads)
 
