@@ -20,14 +20,14 @@ find_package(SQLite3 REQUIRED)
 # Серверная часть
 add_executable(server
     src/server/main.cpp
-    src/server/server.cpp
+    src/common/Logger.cpp
 )
 target_link_libraries(server Threads::Threads)
 
 # Клиентская часть
 add_executable(client
     src/client/main.cpp
-    src/client/client.cpp
+    src/common/Logger.cpp
 )
 target_link_libraries(client Threads::Threads)
 
