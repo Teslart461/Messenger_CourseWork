@@ -22,7 +22,7 @@ bool DataBaseManager::init(const std::string& dbPath) {
         return true;
     }
 
-    // Открываем соединение с базой данных. Если файл не существует, SQLite создаст его.
+    // Открываем соединение с базой данных. Если файл не существует, SQLite создаст его
     int rc = sqlite3_open(dbPath.c_str(), &db);
     if (rc != SQLITE_OK) {
         Logger::getInstance().log("Ошибка открытия БД: " + std::string(sqlite3_errmsg(db)), LogLevel::ERROR);
@@ -69,7 +69,7 @@ bool DataBaseManager::init(const std::string& dbPath) {
     )";
 
     // Выполняем SQL-запрос на создание таблиц.
-    // sqlite3_exec выполняет сразу все SQL-команды из переданной строки.
+    // sqlite3_exec выполняет сразу все SQL-команды из переданной строки
     char* errMsg = nullptr;
     rc = sqlite3_exec(db, sqlSchema, nullptr, nullptr, &errMsg);
     
@@ -96,4 +96,99 @@ void DataBaseManager::close() {
         initialized = false;
         Logger::getInstance().log("Соединение с БД закрыто.", LogLevel::INFO);
     }
+}
+
+
+
+// Отделение логики регистрации, аутентификации и создания чата для удобства использования
+
+
+
+
+// Метод для регистрации нового пользователя. Возвращает true при успешной регистрации, false при ошибке (например, если логин уже занят)
+bool DataBaseManager::registerUser(const std::string& username, const std::string& passwordHash) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return false;
+
+    // SQL-запрос для вставки нового пользователя. Используем параметризованный запрос для безопасности
+    const char* sql = "INSERT INTO users (username, password_hash) VALUES (?, ?);";
+    sqlite3_stmt* stmt = nullptr;
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем false
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Logger::getInstance().log("Ошибка подготовки запроса registerUser", LogLevel::ERROR);
+        return false;
+    }
+
+    // Привязываем параметры: 1-й параметр - username, 2-й - passwordHash
+    // SQLITE_TRANSIENT указывает SQLite сделать копию строки, чтобы избежать проблем с памятью
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, passwordHash.c_str(), -1, SQLITE_TRANSIENT);
+
+    // Выполняем запрос. Если результат SQLITE_DONE, значит вставка прошла успешно
+    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+
+    // Логируем результат регистрации
+    if (success) {
+        Logger::getInstance().log("Зарегистрирован новый пользователь: " + username, LogLevel::INFO);
+    } else {
+        Logger::getInstance().log("Не удалось зарегистрировать пользователя (возможно логин уже используется): " + username, LogLevel::WARNING);
+    }
+
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return success;
+}
+
+// Метод для аутентификации пользователя. Возвращает ID пользователя при успешной аутентификации, -1 при ошибке (например, если логин/пароль не совпадают)
+int DataBaseManager::authenticateUser(const std::string& username, const std::string& passwordHash) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return -1;
+
+    // SQL-запрос для поиска пользователя с заданным логином и хешем пароля
+    const char* sql = "SELECT id FROM users WHERE username = ? AND password_hash = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    int userId = -1;
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем -1
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Logger::getInstance().log("Ошибка подготовки запроса authenticateUser", LogLevel::ERROR);
+        return -1;
+    }
+
+    // Привязываем параметры: 1-й параметр - username, 2-й - passwordHash
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, passwordHash.c_str(), -1, SQLITE_TRANSIENT);
+
+    // Выполняем запрос. Если результат SQLITE_ROW, значит найден пользователь с таким логином и паролем, и мы можем получить его ID
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        userId = sqlite3_column_int(stmt, 0); // Получаем значение первого столбца (ID пользователя)
+    }
+
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return userId;
+}
+
+// Метод для создания нового личного чата. Возвращает ID созданного чата или -1 при ошибке
+int DataBaseManager::createPersonalChat() {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return -1;
+
+    // SQL-запрос для создания нового личного чата. Тип чата - 'personal', имя не задается (NULL)
+    const char* sql = "INSERT INTO chats (type, name) VALUES ('personal', NULL);";
+
+    // Выполняем запрос. Если результат не SQLITE_OK, значит произошла ошибка при создании чата
+    if (sqlite3_exec(db, sql, nullptr, nullptr, nullptr) != SQLITE_OK) {
+        Logger::getInstance().log("Ошибка создания чата", LogLevel::ERROR);
+        return -1;
+    }
+
+    // Получаем ID только что созданного чата
+    int chatId = sqlite3_last_insert_rowid(db);
+    Logger::getInstance().log("Создан новый чат с ID: " + std::to_string(chatId), LogLevel::INFO);
+    return chatId;
 }

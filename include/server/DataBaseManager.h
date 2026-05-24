@@ -59,6 +59,29 @@ public:
      * @brief Корректное закрытие соединения с БД.
      */
     void close();
+
+
+    /**
+     * @brief Регистрация нового пользователя.
+     * @param username Логин.
+     * @param passwordHash Хеш пароля.
+     * @return true при успехе, false если логин занят или ошибка.
+     */
+    bool registerUser(const std::string& username, const std::string& passwordHash);
+
+    /**
+     * @brief Аутентификация пользователя.
+     * @param username Логин.
+     * @param passwordHash Хеш пароля.
+     * @return ID пользователя при успехе, -1 при ошибке.
+     */
+    int authenticateUser(const std::string& username, const std::string& passwordHash);
+
+    /**
+     * @brief Создать новый личный чат.
+     * @return ID созданного чата или -1 при ошибке.
+     */
+    int createPersonalChat();
 };
 
 #endif
