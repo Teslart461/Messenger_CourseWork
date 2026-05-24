@@ -19,6 +19,7 @@ add_executable(server
     src/server/main.cpp
     src/common/Logger.cpp
     src/server/DataBaseManager.cpp
+    src/server/Server.cpp
 )
 target_link_libraries(server Threads::Threads)
 
