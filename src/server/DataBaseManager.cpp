@@ -107,6 +107,9 @@ void DataBaseManager::close() {
 
 // Метод для регистрации нового пользователя. Возвращает true при успешной регистрации, false при ошибке (например, если логин уже занят)
 bool DataBaseManager::registerUser(const std::string& username, const std::string& passwordHash) {
+    // Как только создается lock_guard, он захватывает мьютекс.
+    // Если другой поток уже держит мьютекс, этот поток заснет на этой строчке
+    // и будет ждать своей очереди. Когда lock_guard выходит из области видимости (например, при выходе из функции), он автоматически отпускает мьютекс.
     std::lock_guard<std::mutex> lock(dbMutex);
 
     if (!db) return false;
@@ -191,4 +194,143 @@ int DataBaseManager::createPersonalChat() {
     int chatId = sqlite3_last_insert_rowid(db);
     Logger::getInstance().log("Создан новый чат с ID: " + std::to_string(chatId), LogLevel::INFO);
     return chatId;
+}
+
+int DataBaseManager::getPersonalChat(int userId1, int userId2) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return -1;
+
+    // SQL-запрос для поиска существующего личного чата между двумя пользователями
+    // из таблицы chat_members как для user1, так и для user2 одновременно.
+    const char* sql = R"(
+        SELECT c.id
+        FROM chats c
+        JOIN chat_members m1 ON c.id = m1.chat_id
+        JOIN chat_members m2 ON c.id = m2.chat_id
+        WHERE c.type = 'personal'
+          AND m1.user_id = ?
+          AND m2.user_id = ?
+        LIMIT 1;
+    )";
+
+    sqlite3_stmt* stmt = nullptr;
+    int chatId = -1;
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем -1
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Logger::getInstance().log("Ошибка подготовки запроса getPersonalChat", LogLevel::ERROR);
+        return -1;
+    }
+
+    // Привязываем параметры: 1-й параметр - userId1, 2-й - userId2
+    sqlite3_bind_int(stmt, 1, userId1);
+    sqlite3_bind_int(stmt, 2, userId2);
+
+    // Выполняем запрос. Если результат SQLITE_ROW, значит найден личный чат между этими пользователями, и мы можем получить его ID
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        chatId = sqlite3_column_int(stmt, 0); // Получаем значение первого столбца (ID чата)
+    }
+
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return chatId; // Вернет ID личного чата или -1 при ошибке (например, если такого чата нет)
+}
+
+int DataBaseManager::getUserIdByUsername(const std::string& username) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return -1;
+
+    // SQL-запрос для получения ID пользователя по его логину
+    const char* sql = "SELECT id FROM users WHERE username = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    int userId = -1;
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем -1
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Logger::getInstance().log("Ошибка подготовки запроса getUserIdByUsername", LogLevel::ERROR);
+        return -1;
+    }
+
+    // Привязываем параметр: 1-й параметр - username
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
+
+    // Выполняем запрос. Если результат SQLITE_ROW, значит найден пользователь с таким логином, и мы можем получить его ID
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        userId = sqlite3_column_int(stmt, 0); // Получаем значение первого столбца (ID пользователя)
+    }
+
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return userId;
+}
+
+bool DataBaseManager::addChatMember(int chatId, int userId) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return false;
+
+    // SQL-запрос для добавления пользователя в чат. Используем параметризованный запрос для безопасности
+    const char* sql = "INSERT INTO chat_members (chat_id, user_id) VALUES (?, ?);";
+    sqlite3_stmt* stmt = nullptr;
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем false
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Logger::getInstance().log("Ошибка подготовки запроса addChatMember", LogLevel::ERROR);
+        return false;
+    }
+
+    // Привязываем параметры: 1-й параметр - chatId, 2-й - userId
+    sqlite3_bind_int(stmt, 1, chatId);
+    sqlite3_bind_int(stmt, 2, userId);
+
+    // Выполняем запрос. Если результат SQLITE_DONE, значит пользователь успешно добавлен в чат
+    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+
+    // Логируем результат добавления участника в чат
+    if (success) {
+        Logger::getInstance().log("Пользователь с ID " + std::to_string(userId) + " добавлен в чат с ID " + std::to_string(chatId), LogLevel::DEBUG);
+    } else {
+        Logger::getInstance().log("Не удалось добавить пользователя с ID " + std::to_string(userId) + " в чат с ID " + std::to_string(chatId), LogLevel::WARNING);
+    }
+
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return success;
+}
+
+bool DataBaseManager::saveMessage(int chatId, int senderId, const std::string& content) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return false;
+
+    // SQL-запрос для сохранения сообщения в чате. Используем параметризованный запрос для безопасности
+    const char* sql = "INSERT INTO messages (chat_id, sender_id, content) VALUES (?, ?, ?);";
+    sqlite3_stmt* stmt = nullptr;
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем false
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Logger::getInstance().log("Ошибка подготовки запроса saveMessage", LogLevel::ERROR);
+        return false;
+    }
+
+    // Привязываем параметры: 1-й параметр - chatId, 2-й - senderId, 3-й - content
+    sqlite3_bind_int(stmt, 1, chatId);
+    sqlite3_bind_int(stmt, 2, senderId);
+    sqlite3_bind_text(stmt, 3, content.c_str(), -1, SQLITE_TRANSIENT);
+
+    // Выполняем запрос. Если результат SQLITE_DONE, значит сообщение успешно сохранено в базе данных
+    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+
+    // Логируем результат сохранения сообщения
+    if (success) {
+        Logger::getInstance().log("Сообщение от пользователя с ID " + std::to_string(senderId) + " сохранено в чате с ID " + std::to_string(chatId), LogLevel::DEBUG);
+    } else {
+        Logger::getInstance().log("Не удалось сохранить сообщение от пользователя с ID " + std::to_string(senderId) + " в чате с ID " + std::to_string(chatId), LogLevel::WARNING);
+    }
+
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return success;
 }

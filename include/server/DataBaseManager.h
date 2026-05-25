@@ -82,6 +82,41 @@ public:
      * @return ID созданного чата или -1 при ошибке.
      */
     int createPersonalChat();
+
+    /**
+     * @brief Получить ID сущестсвующего личного чата между двумя пользователями
+     * @param userId1 ID первого пользователя
+     * @param userId2 ID второго пользователя
+     * @return ID личного чата или -1 при ошибке  
+     */
+    
+    int getPersonalChat(int userId1, int userId2);
+
+    /**
+     * @brief Получить ID пользователя по логину.
+     * @param username Логин.
+     * @return ID пользователя или -1, если не найден.
+     */
+    int getUserIdByUsername(const std::string& username);
+
+    /**
+     * @brief Добавить пользователя в чат.
+     * @param chatId ID чата.
+     * @param userId ID пользователя.
+     * @return true при успехе, false при ошибке.
+     */
+    bool addChatMember(int chatId, int userId);
+
+    /**
+     * @brief Сохранить сообщение в чате.
+     * @param chatId ID чата.
+     * @param senderId ID отправителя.
+     * @param content Текст сообщения.
+     * @return true при успехе, false при ошибке.
+     */
+    bool saveMessage(int chatId, int senderId, const std::string& content);
+
+
 };
 
 #endif
