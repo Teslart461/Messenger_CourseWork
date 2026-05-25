@@ -3,6 +3,7 @@
 
 #include <string>
 #include <cstdint>
+#include <thread>
 
 class Server {
 private:
@@ -10,6 +11,13 @@ private:
     uint16_t port; // Порт, на котором сервер будет слушать входящие соединения
     bool isRunning; // Флаг для контроля работы сервера
     
+    /**
+    * @brief Метод для обслуживания конкретного клиента.
+    * Запускается в отдельном потоке.
+    * @param clientSocket Сокет подключенного клиента.
+    */
+    void handleClient(int clientSocket);
+
 public:
     /**
     * @brief Конструктор сервера.
