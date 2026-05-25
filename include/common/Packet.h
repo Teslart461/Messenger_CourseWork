@@ -2,21 +2,17 @@
 #define PACKET_H
 
 #include <string>
+
 #include "external/json.hpp"
+#include "common/PacketType.h"
+#include "common/PacketUtils.h"
 
 // Для удобства использования json в коде, определим псевдоним типа json из библиотеки nlohmann
 using json = nlohmann::json;
 
-// Определение типов пакетов, которые будут использоваться для обмена данными между клиентом и сервером
-enum class PacketType {
-    REGISTER,
-    LOGIN,
-    CREATE_CHAT,
-    SEND_MESSAGE,
-    SERVER_MESSAGE,
-    ERROR
-};
-
+/**
+* @brief Пакет для обмена данными между клиентом и сервером.
+*/
 struct Packet {
     PacketType type; // Тип пакета, определяющий его назначение
     json data; // Данные, содержащиеся в пакете, в формате JSON
@@ -27,7 +23,7 @@ struct Packet {
      */
     std::string serialize() const {
         json j;
-        j["type"] = static_cast<int>(type); // Преобразуем enum в int для сериализации
+        j["type"] = packetTypeToString(type); // Преобразуем enum в строку для сериализации
         j["data"] = data; // Упаковываем данные в JSON
         return j.dump(); // Преобразуем JSON-объект в строку
     }
@@ -41,7 +37,7 @@ struct Packet {
         try {
         auto j = json::parse(rawData); // Парсим строку JSON в объект
         Packet packet;
-        packet.type = static_cast<PacketType>(j["type"].get<int>()); // Преобразуем int обратно в enum
+        packet.type = stringToPacketType(j.at("type").get<std::string>()); // Преобразуем строку обратно в enum
         packet.data = j.at("data"); // Извлекаем данные из JSON, используя at() для проверки наличия ключа
         return packet; // Возвращаем десериализованный пакет
 
