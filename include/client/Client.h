@@ -6,7 +6,8 @@
 
 class Client {
 private:
-    int clientSocket;
+    int clientSocket; // Файловый дескриптор сокета клиента
+    bool isConnected; // Флаг, указывающий, подключен ли клиент к серверу
 
 public:
     /**

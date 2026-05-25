@@ -105,7 +105,7 @@ void Server::handleClient(int clientSocket) {
     send(clientSocket, welcomeMessage.c_str(), welcomeMessage.length() + 1, 0);
 
     // Буфер для приема данных
-    char buffer[1024];
+    char buffer[4096];
     memset(buffer, 0, sizeof(buffer));
 
     // recv - получает данные от клиента и сохраняет их в буфер. Возвращает количество байт, полученных от клиента
@@ -144,7 +144,7 @@ void Server::handleClient(int clientSocket) {
             
             Packet error;
             error.type = PacketType::ERROR;
-            error.data["message"] = "Неверный формат JSON";
+            error.data["info"] = "Неверный формат JSON";
             std::string errorStr = error.serialize();
             send(clientSocket, errorStr.c_str(), errorStr.length() + 1, 0);
         }

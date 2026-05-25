@@ -9,7 +9,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-Client::Client(): clientSocket(-1) {}
+Client::Client(): clientSocket(-1), isConnected(false) {}
 
 Client::~Client() {
     disconnect();
@@ -23,6 +23,7 @@ bool Client::connectToServer(const std::string& ip, uint16_t port) {
     // Проверка на успешное создание сокета
     if (clientSocket < 0) {
         Logger::getInstance().log("Ошибка создания сокета", LogLevel::ERROR);
+        std::cerr << "Не удалось создать сокет." << std::endl;
         return false;
     }
 
@@ -35,6 +36,7 @@ bool Client::connectToServer(const std::string& ip, uint16_t port) {
 
     // inet_pton - преобразует строковый IP-адрес в бинарный формат и сохраняет его в структуре serverAddress.sin_addr
     if (inet_pton(AF_INET, ip.c_str(), &serverAddress.sin_addr) <= 0) {
+        Logger::getInstance().log("Неверный IP-адрес", LogLevel::ERROR);
         std::cerr << "Неверный IP-адрес." << std::endl;
         return false;
     }
@@ -42,17 +44,21 @@ bool Client::connectToServer(const std::string& ip, uint16_t port) {
     // Подключение к серверу (TCP Handshake)
     if (connect(clientSocket, (sockaddr*)&serverAddress, sizeof(serverAddress)) < 0) {
         Logger::getInstance().log("Ошибка подключения к серверу", LogLevel::ERROR);
+        std::cerr << "Не удалось подключиться к серверу." << std::endl;
         return false;
     }
 
+    isConnected = true;
     Logger::getInstance().log("Подключение к серверу успешно", LogLevel::INFO);
+    std::cout << "Успешно подключился к серверу: " << ip << ":" << port << std::endl;
     return true;
 }
 
 // Метод для отправки сообщения на сервер
 bool Client::sendMessage(const std::string& message) {
-    // Проверка, что сокет открыт
-    if (clientSocket < 0) {
+    if (!isConnected) {
+        Logger::getInstance().log("Попытка отправить сообщение без подключения к серверу", LogLevel::WARNING);
+        std::cerr << "Вы не подключены к серверу. Сначала подключитесь, а затем отправляйте сообщения." << std::endl;
         return false;
     }
 
@@ -62,8 +68,13 @@ bool Client::sendMessage(const std::string& message) {
 }
 
 std::string Client::receiveData() {
+    // Проверяем, что клиент подключен, прежде чем пытаться получить данные от сервера
+    if (!isConnected) {
+        return "";
+    }
+
     // Буфер для получения данных от сервера
-    char buffer[1024];
+    char buffer[4096];
     memset(buffer, 0, sizeof(buffer)); // Инициализация буфера нулями
 
     // recv - получает данные от сервера и сохраняет их в буфер. Возвращает количество байт, полученных от сервера
@@ -72,6 +83,7 @@ std::string Client::receiveData() {
     // Проверка на ошибки при получении данных
     if (bytesRead <= 0) {
         Logger::getInstance().log("Ошибка при получении данных от сервера", LogLevel::ERROR);
+        std::cerr << "Ошибка при получении данных от сервера." << std::endl;
         return "";
     }
 
@@ -80,12 +92,13 @@ std::string Client::receiveData() {
 }
 
 void Client::disconnect() {
-    // Закрываем сокет, если он открыт
-    if (clientSocket >= 0) {
+    // Проверяем, что сокет открыт и клиент подключен, прежде чем пытаться отключиться
+    if (isConnected) {
         close(clientSocket);
-
         clientSocket = -1;
+        isConnected = false;
 
         Logger::getInstance().log("Отключение от сервера", LogLevel::INFO);
+        std::cout << "Отключился от сервера." << std::endl;
     }
 }
