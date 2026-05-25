@@ -13,11 +13,11 @@ inline std::string packetTypeToString(PacketType type) {
 
     switch (type) {
 
-        case PacketType::LOGIN:
-            return "login";
-
         case PacketType::REGISTER:
             return "register";
+
+        case PacketType::LOGIN:
+            return "login";
 
         case PacketType::CREATE_CHAT:
             return "create_chat";
@@ -25,11 +25,11 @@ inline std::string packetTypeToString(PacketType type) {
         case PacketType::SEND_MESSAGE:
             return "send_message";
 
-        case PacketType::SERVER_MESSAGE:
-            return "server_message";
+        case PacketType::SUCCESS_RESPONSE:
+            return "success_response";
 
-        case PacketType::ERROR:
-            return "error";
+        case PacketType::ERROR_RESPONSE:
+            return "error_response";
 
         default:
             return "unknown";
@@ -41,12 +41,12 @@ inline std::string packetTypeToString(PacketType type) {
  */
 inline PacketType stringToPacketType(const std::string& type) {
 
-    if (type == "login") {
-        return PacketType::LOGIN;
-    }
-
     if (type == "register") {
         return PacketType::REGISTER;
+    }
+
+    if (type == "login") {
+        return PacketType::LOGIN;
     }
 
     if (type == "create_chat") {
@@ -57,12 +57,12 @@ inline PacketType stringToPacketType(const std::string& type) {
         return PacketType::SEND_MESSAGE;
     }
 
-    if (type == "server_message") {
-        return PacketType::SERVER_MESSAGE;
+    if (type == "success_response") {
+        return PacketType::SUCCESS_RESPONSE;
     }
 
-    if (type == "error") {
-        return PacketType::ERROR;
+    if (type == "error_response") {
+        return PacketType::ERROR_RESPONSE;
     }
 
     throw std::invalid_argument("Неизвестный тип пакета: " + type);

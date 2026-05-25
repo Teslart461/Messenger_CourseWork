@@ -130,7 +130,7 @@ void Server::handleClient(int clientSocket) {
 
                 // Отправляем ответ клиенту, подтверждая получение сообщения
                 Packet response;
-                response.type = PacketType::SERVER_MESSAGE;
+                response.type = PacketType::SUCCESS_RESPONSE;
                 response.data["status"] = "OK";
                 response.data["info"] = "Сообщение обработано сервером";
 
@@ -143,7 +143,7 @@ void Server::handleClient(int clientSocket) {
             Logger::getInstance().log("Ошибка обработки JSON: " + std::string(e.what()), LogLevel::ERROR);
             
             Packet error;
-            error.type = PacketType::ERROR;
+            error.type = PacketType::ERROR_RESPONSE;
             error.data["info"] = "Неверный формат JSON";
             std::string errorStr = error.serialize();
             send(clientSocket, errorStr.c_str(), errorStr.length() + 1, 0);
