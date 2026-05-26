@@ -1,4 +1,5 @@
 #include "server/DataBaseManager.h"
+#include "common/Hasher.h"
 
 // Реализация метода получения Singleton-объекта
 DataBaseManager& DataBaseManager::getInstance() {
@@ -40,6 +41,7 @@ bool DataBaseManager::init(const std::string& dbPath) {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -114,8 +116,12 @@ bool DataBaseManager::registerUser(const std::string& username, const std::strin
 
     if (!db) return false;
 
+    // Генерируем уникальную соль для этого пользователя
+    std::string salt = Hasher::generateSalt();
+    std::string hash = Hasher::sha256(passwordHash, salt);
+
     // SQL-запрос для вставки нового пользователя. Используем параметризованный запрос для безопасности
-    const char* sql = "INSERT INTO users (username, password_hash) VALUES (?, ?);";
+    const char* sql = "INSERT INTO users (username, password_hash, password_salt) VALUES (?, ?, ?);";
     sqlite3_stmt* stmt = nullptr;
 
     // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем false
@@ -124,10 +130,11 @@ bool DataBaseManager::registerUser(const std::string& username, const std::strin
         return false;
     }
 
-    // Привязываем параметры: 1-й параметр - username, 2-й - passwordHash
+    // Привязываем параметры: 1-й параметр - username, 2-й - hash пароля, 3-й - соль
     // SQLITE_TRANSIENT указывает SQLite сделать копию строки, чтобы избежать проблем с памятью
     sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, passwordHash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, salt.c_str(), -1, SQLITE_TRANSIENT);
 
     // Выполняем запрос. Если результат SQLITE_DONE, значит вставка прошла успешно
     bool success = (sqlite3_step(stmt) == SQLITE_DONE);
@@ -150,24 +157,37 @@ int DataBaseManager::authenticateUser(const std::string& username, const std::st
 
     if (!db) return -1;
 
-    // SQL-запрос для поиска пользователя с заданным логином и хешем пароля
-    const char* sql = "SELECT id FROM users WHERE username = ? AND password_hash = ?;";
+    // SQL-запрос для поиска пользователя по логину и получению его ID, хеша пароля и соли
+    // Сначала получаем соль пользователя
+    const char* getSaltSql = "SELECT id, password_hash, password_salt FROM users WHERE username = ?;";
     sqlite3_stmt* stmt = nullptr;
     int userId = -1;
 
     // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем -1
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, getSaltSql, -1, &stmt, nullptr) != SQLITE_OK) {
         Logger::getInstance().log("Ошибка подготовки запроса authenticateUser", LogLevel::ERROR);
         return -1;
     }
 
-    // Привязываем параметры: 1-й параметр - username, 2-й - passwordHash
+    // Привязываем параметр: 1-й параметр - username
     sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, passwordHash.c_str(), -1, SQLITE_TRANSIENT);
 
     // Выполняем запрос. Если результат SQLITE_ROW, значит найден пользователь с таким логином и паролем, и мы можем получить его ID
     if (sqlite3_step(stmt) == SQLITE_ROW) {
-        userId = sqlite3_column_int(stmt, 0); // Получаем значение первого столбца (ID пользователя)
+        int dbUserId = sqlite3_column_int(stmt, 0); // Получаем ID пользователя
+        const unsigned char* dbHash = sqlite3_column_text(stmt, 1); // Получаем хеш пароля из БД
+        const unsigned char* dbSalt = sqlite3_column_text(stmt, 2); // Получаем соль из БД
+
+        // Преобразуем хеш и соль из БД в строки для дальнейшей работы
+        std::string storedHash(reinterpret_cast<const char*>(dbHash));
+        std::string storedSalt(reinterpret_cast<const char*>(dbSalt));
+
+        // Хешируем введённый пароль с солью из БД
+        std::string computedHash = Hasher::sha256(passwordHash, storedSalt);
+
+        if (computedHash == storedHash) {
+            userId = dbUserId;
+        }
     }
 
     // Освобождаем ресурсы, связанные с подготовленным запросом
@@ -464,6 +484,7 @@ int DataBaseManager::getOtherChatMember(int chatId, int myUserId) {
         }
     } else {
         Logger::getInstance().log("Ошибка подготовки запроса getOtherChatMember", LogLevel::ERROR);
+        return -1;
     }
 
     // Освобождаем ресурсы, связанные с подготовленным запросом

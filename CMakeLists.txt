@@ -14,22 +14,27 @@ find_package(Threads REQUIRED)
 # Поиск библиотеки SQLite3
 find_package(SQLite3 REQUIRED)
 
+# Поиск OpenSSL (для SHA-256)
+find_package(OpenSSL REQUIRED)
+
 # Серверная часть
 add_executable(server
     src/server/main.cpp
     src/common/Logger.cpp
     src/server/DataBaseManager.cpp
     src/server/Server.cpp
+    src/common/Hasher.cpp
 )
 target_link_libraries(server Threads::Threads)
+target_link_libraries(server SQLite::SQLite3)
+target_link_libraries(server OpenSSL::SSL OpenSSL::Crypto)
 
 # Клиентская часть
 add_executable(client
     src/client/main.cpp
     src/common/Logger.cpp
     src/client/Client.cpp
+    src/common/Hasher.cpp
 )
 target_link_libraries(client Threads::Threads)
-
-
-target_link_libraries(server SQLite::SQLite3)
+target_link_libraries(client OpenSSL::SSL OpenSSL::Crypto)
