@@ -25,7 +25,6 @@ void clearConsole() {
  */
 void pressEnterToContinue() {
     std::cout << "\nНажмите Enter, чтобы продолжить...";
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     std::cin.get();
 }
 

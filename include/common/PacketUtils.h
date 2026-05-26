@@ -25,6 +25,9 @@ inline std::string packetTypeToString(PacketType type) {
         case PacketType::SEND_MESSAGE:
             return "send_message";
 
+        case PacketType::NEW_MESSAGE:
+            return "new_message";
+
         case PacketType::GET_CHATS:
             return "get_chats";
 
@@ -67,6 +70,10 @@ inline PacketType stringToPacketType(const std::string& type) {
 
     if (type == "send_message") {
         return PacketType::SEND_MESSAGE;
+    }
+
+    if (type == "new_message") {
+        return PacketType::NEW_MESSAGE;
     }
 
     if (type == "get_chats") {
