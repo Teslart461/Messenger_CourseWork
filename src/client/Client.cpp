@@ -62,9 +62,22 @@ bool Client::sendMessage(const std::string& message) {
         return false;
     }
 
-    // send - отправляет данные на сервер. Возвращает количество байт, отправленных на сервер
-    ssize_t bytesSent = send(clientSocket, message.c_str(), message.length() + 1,0);
-    return bytesSent > 0;
+    // Для надежной передачи данных по сети, особенно если сообщения могут быть длинными
+    // полезно сначала отправлять размер сообщения, а затем само сообщение.
+    // Это позволяет серверу знать, сколько байт ожидать.
+    uint32_t messageSize = htonl(message.size());
+
+    // Сначала отправляем размер
+    if (send(clientSocket, &messageSize, sizeof(messageSize), 0) <= 0) {
+        return false;
+    }
+
+    // Затем отправляем само сообщение
+    if (send(clientSocket, message.c_str(), message.size(), 0) <= 0) {
+        return false;
+    }
+
+    return true;
 }
 
 std::string Client::receiveData() {
@@ -73,22 +86,31 @@ std::string Client::receiveData() {
         return "";
     }
 
-    // Буфер для получения данных от сервера
-    char buffer[4096];
-    memset(buffer, 0, sizeof(buffer)); // Инициализация буфера нулями
+    // Получаем данные от сервера. Для надежности сначала читаем размер сообщения, а затем само сообщение
+    uint32_t messageSize = 0;
 
-    // recv - получает данные от сервера и сохраняет их в буфер. Возвращает количество байт, полученных от сервера
-    ssize_t bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+    // Получаем размер сообщения
+    // MSG_WAITALL - флаг, который заставляет recv ждать, пока не будет получено указанное количество байт
+    ssize_t sizeRead = recv(clientSocket, &messageSize, sizeof(messageSize), MSG_WAITALL);
 
-    // Проверка на ошибки при получении данных
-    if (bytesRead <= 0) {
-        Logger::getInstance().log("Ошибка при получении данных от сервера", LogLevel::ERROR);
-        std::cerr << "Ошибка при получении данных от сервера." << std::endl;
+    if (sizeRead <= 0) {
         return "";
     }
 
-    // Преобразуем буфер в строку и возвращаем её
-    return std::string(buffer);
+    // ntohl (Network TO Host Long) - переводит число из сетевого порядка байт (Big-Endian) в порядок байт хоста
+    uint32_t packetSize = ntohl(messageSize);
+
+    // Создаем строку нужного размера для получения сообщения
+    std::string buffer(packetSize, '\0');
+
+    // Получаем всё сообщение
+    ssize_t bytesRead = recv(clientSocket, buffer.data(), packetSize, MSG_WAITALL);
+
+    if (bytesRead <= 0) {
+        return "";
+    }
+
+    return buffer;
 }
 
 void Client::disconnect() {
