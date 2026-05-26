@@ -231,7 +231,50 @@ void Server::handleClient(int clientSocket) {
                 responsePacket.type = PacketType::ERROR_RESPONSE;
                 responsePacket.data["message"] = "Ошибка БД при сохранении сообщения";
             }
-        } 
+
+
+
+        } else if (incomingPacket.type == PacketType::GET_CHATS) {
+            int userId = incomingPacket.data["user_id"];
+                
+            // Достаем вектор чатов из БД
+            auto chats = DataBaseManager::getInstance().getUserChats(userId);
+
+            // Формируем JSON-массив
+            json chatArray = json::array();
+            for (const auto& chat : chats) {
+                chatArray.push_back({
+                    {"chat_id", chat.chatId}, 
+                    {"chat_name", chat.chatName}
+                });
+            }
+
+            responsePacket.type = PacketType::CHAT_LIST_RESPONSE;
+            responsePacket.data["chats"] = chatArray;
+            responsePacket.data["message"] = "Список чатов получен";
+
+
+
+        } else if (incomingPacket.type == PacketType::GET_CHAT_HISTORY) {
+                int chatId = incomingPacket.data["chat_id"];
+                
+                // Достаем вектор сообщений из БД
+                auto history = DataBaseManager::getInstance().getChatHistory(chatId);
+
+                // Формируем JSON-массив сообщений
+                json historyArray = json::array();
+                for (const auto& msg : history) {
+                    historyArray.push_back({
+                        {"sender_id", msg.senderId},
+                        {"content", msg.content},
+                        {"timestamp", msg.timestamp}
+                    });
+                }
+
+                responsePacket.type = PacketType::HISTORY_RESPONSE;
+                responsePacket.data["history"] = historyArray;
+                responsePacket.data["message"] = "История сообщений получена";
+            }
             
         // Отправляем ответ клиенту
         std::string responseStr = responsePacket.serialize();
