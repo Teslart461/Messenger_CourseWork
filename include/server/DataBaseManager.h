@@ -9,6 +9,33 @@
 #include "common/Logger.h"
 
 /**
+ * @brief Типы чатов: личный (между двумя пользователями) и групповой (с несколькими участниками).
+ */
+enum class ChatType {
+    PERSONAL,
+    GROUP
+};
+
+/**
+ * @brief Структура с информацией о чате для списка чатов пользователя.
+ */
+struct ChatInfo {
+    int chatId;              // ID чата
+    std::string chatName;    // Логин собеседника
+    ChatType chatType;       // Тип чата
+};
+
+/**
+ * @brief Структура с информацией об одном сообщении.
+ */
+struct MessageInfo {
+    int senderId;            // ID отправителя
+    std::string content;     // Текст сообщения
+    std::string timestamp;   // Временная метка в виде строки
+};
+
+
+/**
  * @brief Класс для управления базой данных (SQLite3).
  * Реализует паттерн Singleton — в приложении существует ровно один экземпляр,
  * через который выполняются все операции с базой данных.
@@ -116,7 +143,27 @@ public:
      */
     bool saveMessage(int chatId, int senderId, const std::string& content);
 
+    /**
+     * @brief Получить список чатов, в которых участвует пользователь.
+     * @param userId ID пользователя.
+     * @return Вектор структур ChatInfo с информацией о каждом чате.
+     */
+    std::vector<ChatInfo> getUserChats(int userId);
 
+    /**
+     * @brief Получить историю сообщений для чата.
+     * @param chatId ID чата.
+     * @return Вектор структур MessageInfo, отсортированный по возрастанию времени.
+     */
+    std::vector<MessageInfo> getChatHistory(int chatId);
+
+    /**
+     * @brief Получить ID второго участника личного чата.
+     * @param chatId ID чата.
+     * @param myUserId ID текущего пользователя.
+     * @return ID собеседника или -1, если не найден.
+     */
+    int getOtherChatMember(int chatId, int myUserId);
 };
 
 #endif

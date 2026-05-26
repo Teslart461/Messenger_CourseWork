@@ -334,3 +334,139 @@ bool DataBaseManager::saveMessage(int chatId, int senderId, const std::string& c
     sqlite3_finalize(stmt);
     return success;
 }
+
+std::vector<ChatInfo> DataBaseManager::getUserChats(int userId) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    std::vector<ChatInfo> chats;
+
+    if (!db) return chats;
+
+    // Для личных чатов: получаем ID чата и логин собеседника.
+    // Для групповых: получаем ID чата и название группы из chats.name.
+    // Объединяем оба запроса через UNION ALL.
+    const char* sql = R"(
+        SELECT c.id AS chat_id, u.username AS display_name, c.type
+        FROM chats c
+        JOIN chat_members m1 ON c.id = m1.chat_id AND m1.user_id = ?
+        JOIN chat_members m2 ON c.id = m2.chat_id AND m2.user_id != ?
+        JOIN users u ON m2.user_id = u.id
+        WHERE c.type = 'personal'
+
+        UNION ALL
+
+        SELECT c.id AS chat_id, c.name AS display_name, c.type
+        FROM chats c
+        JOIN chat_members m ON c.id = m.chat_id AND m.user_id = ?
+        WHERE c.type = 'group'
+
+        ORDER BY chat_id;
+    )";
+
+    sqlite3_stmt* stmt = nullptr;
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем пустой вектор
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        // Привязываем параметры: 1-й параметр - userId для личных чатов
+        // 2-й параметр - userId для исключения самого себя 
+        // 3-й параметр - userId для групповых чатов
+        sqlite3_bind_int(stmt, 1, userId);  // для cm1.user_id (personal)
+        sqlite3_bind_int(stmt, 2, userId);  // для cm2.user_id != (personal)
+        sqlite3_bind_int(stmt, 3, userId);  // для cm.user_id (group)
+
+        // sqlite3_step возвращает SQLITE_ROW каждый раз, когда находит новую строку
+        // Поэтому используем цикл while, чтобы собрать весь список чатов
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            ChatInfo info;
+            info.chatId = sqlite3_column_int(stmt, 0); // Получаем ID чата
+            
+            // Получаем имя чата (логин собеседника для личного чата или название группы для группового)
+            const unsigned char* nameText = sqlite3_column_text(stmt, 1);
+            info.chatName = nameText ? reinterpret_cast<const char*>(nameText) : "Unknown";
+
+            // Получаем тип чата (personal или group)
+            std::string typeStr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            info.chatType = (typeStr == "group") ? ChatType::GROUP : ChatType::PERSONAL;
+            
+            chats.push_back(info); // Добавляем информацию о чате в вектор
+        }
+    } else {
+        Logger::getInstance().log("Ошибка подготовки запроса getUserChats", LogLevel::ERROR);
+    }
+    
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return chats;
+}
+
+std::vector<MessageInfo> DataBaseManager::getChatHistory(int chatId) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    std::vector<MessageInfo> history;
+
+    if (!db) return history;
+
+    // Сортировка ASC (Ascending) гарантирует, что старые сообщения будут первыми (сверху)
+    const char* sql = "SELECT sender_id, content, timestamp FROM messages WHERE chat_id = ? ORDER BY id ASC;";
+
+    sqlite3_stmt* stmt = nullptr;
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем пустой вектор
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        // Привязываем параметр: 1-й параметр - chatId
+        sqlite3_bind_int(stmt, 1, chatId);
+
+        // sqlite3_step возвращает SQLITE_ROW каждый раз, когда находит новую строку
+        // Поэтому используем цикл while, чтобы собрать всю историю сообщений
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            // Извлекаем данные из каждой строки результата и сохраняем их в структуру MessageInfo, которую затем добавляем в вектор history
+            MessageInfo msg;
+            msg.senderId = sqlite3_column_int(stmt, 0); // Получаем ID отправителя
+            
+            // Получаем текст сообщения
+            const unsigned char* contentText = sqlite3_column_text(stmt, 1);
+            msg.content = contentText ? reinterpret_cast<const char*>(contentText) : "";
+            
+            // Получаем временную метку сообщения
+            const unsigned char* timeText = sqlite3_column_text(stmt, 2);
+            msg.timestamp = timeText ? reinterpret_cast<const char*>(timeText) : "";
+
+            history.push_back(msg); // Добавляем информацию о сообщении в вектор истории
+        }
+    } else {
+        Logger::getInstance().log("Ошибка подготовки запроса getChatHistory", LogLevel::ERROR);
+    }
+    
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return history;
+}
+
+int DataBaseManager::getOtherChatMember(int chatId, int myUserId) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return -1;
+
+    // В личном чате ровно 2 участника — находим того, чей ID не равен нашему.
+    const char* sql = "SELECT user_id FROM chat_members WHERE chat_id = ? AND user_id != ?;";
+    sqlite3_stmt* stmt = nullptr;
+    int otherUserId = -1; // Инициализируем ID собеседника как -1, что будет означать "не найден"
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем -1
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        // Привязываем параметры: 1-й параметр - chatId, 2-й - myUserId
+        sqlite3_bind_int(stmt, 1, chatId);
+        sqlite3_bind_int(stmt, 2, myUserId);
+
+        // Выполняем запрос. Если результат SQLITE_ROW, значит найден другой участник личного чата, и мы можем получить его ID
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            otherUserId = sqlite3_column_int(stmt, 0);
+        }
+    } else {
+        Logger::getInstance().log("Ошибка подготовки запроса getOtherChatMember", LogLevel::ERROR);
+    }
+
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return otherUserId;
+}
