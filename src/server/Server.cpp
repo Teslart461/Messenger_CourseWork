@@ -100,62 +100,175 @@ void Server::start() {
 void Server::handleClient(int clientSocket) {
     Logger::getInstance().log("Начало обслуживания клиента в новом потоке. Для обслуживаемого сокета: " + std::to_string(clientSocket), LogLevel::DEBUG);
 
-    // Отправляем приветственное сообщение клиенту
-    std::string welcomeMessage = "Добро пожаловать на сервер! Вы в отдельном потоке. Ожидаю ваш JSON пакет...";
-    send(clientSocket, welcomeMessage.c_str(), welcomeMessage.length() + 1, 0);
+    while(true){
+        // Для надежной передачи данных по сети, особенно если сообщения могут быть длинными
+        // полезно сначала отправлять размер сообщения, а затем само сообщение.
+        // Это позволяет серверу знать, сколько байт ожидать.
+        uint32_t packetSizeNetwork;
 
-    // Буфер для приема данных
-    char buffer[4096];
-    memset(buffer, 0, sizeof(buffer));
+        // Получаем размер пакета от клиента. Используем MSG_WAITALL, чтобы гарантировать получение всех байт размера
+        ssize_t sizeRead = recv(clientSocket, &packetSizeNetwork, sizeof(packetSizeNetwork), MSG_WAITALL);
 
-    // recv - получает данные от клиента и сохраняет их в буфер. Возвращает количество байт, полученных от клиента
-    ssize_t bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+        // Проверяем, что клиент не отключился и данные были получены успешно
+        if (sizeRead <= 0) {
+            Logger::getInstance().log("Клиент отключился.", LogLevel::WARNING);
+            break;
+        }
 
-    // Проверка на ошибки при получении данных
-    if (bytesRead > 0) {
-        std::string receivedData(buffer);
-        Logger::getInstance().log("Сырые данные от клиента: " + receivedData, LogLevel::DEBUG);
+        // Переводим размер из network byte order
+        uint32_t packetSize = ntohl(packetSizeNetwork);
 
+        // Создаем строку нужного размера для получения пакета
+        std::string receivedData(packetSize, '\0');
+
+        // Получаем весь пакет от клиента. Используем MSG_WAITALL, чтобы гарантировать получение всех байт пакета
+        ssize_t bytesRead = recv(clientSocket, receivedData.data(), packetSize, MSG_WAITALL);
+
+        if (bytesRead <= 0) { 
+            Logger::getInstance().log("Ошибка получения данных.", LogLevel::ERROR);
+            break;
+        }
+
+        Logger::getInstance().log("Получены данные от клиента: " + receivedData, LogLevel::DEBUG);
+
+        // Десериализуем полученные данные в объект Packet
+        Packet incomingPacket;
         try {
-            // Пытаемся десериализовать полученные данные в объект Packet
-            Packet incomingPacket = Packet::deserialize(receivedData);
-
-            // Проверяем тип пакета и обрабатываем его соответствующим образом
-            if (incomingPacket.type == PacketType::SEND_MESSAGE) {
-                // Извлекаем данные из пакета и логируем их
-                int senderId = incomingPacket.data["sender_id"];
-                std::string text = incomingPacket.data["text"];
-
-                Logger::getInstance().log("Получено сообщение: [От ID " + std::to_string(senderId) + "]: " + text, LogLevel::INFO);
-
-                // Отправляем ответ клиенту, подтверждая получение сообщения
-                Packet response;
-                response.type = PacketType::SUCCESS_RESPONSE;
-                response.data["status"] = "OK";
-                response.data["info"] = "Сообщение обработано сервером";
-
-                // Сериализуем ответ в строку JSON и отправляем его клиенту
-                std::string responseStr = response.serialize();
-                send(clientSocket, responseStr.c_str(), responseStr.length() + 1, 0);
-            }
+            incomingPacket = Packet::deserialize(receivedData);
         } catch (const std::exception& e) {
-            // Если произошла ошибка при десериализации JSON, логируем её и отправляем клиенту сообщение об ошибке
-            Logger::getInstance().log("Ошибка обработки JSON: " + std::string(e.what()), LogLevel::ERROR);
+            Logger::getInstance().log("Ошибка при десериализации пакета: " + std::string(e.what()), LogLevel::ERROR);
+            continue;
+        }
+        
+        try {
+        // Готовим ответный пакет для отправки клиенту
+        Packet responsePacket;
+
+        // Обрабатываем пакет в зависимости от его типа
+        if (incomingPacket.type == PacketType::LOGIN) {
+            std::string username = incomingPacket.data["username"];
+            std::string password = incomingPacket.data["password"];
+                
+            int userId = DataBaseManager::getInstance().authenticateUser(username, password);
+            if (userId != -1) {
+                responsePacket.type = PacketType::SUCCESS_RESPONSE;
+                responsePacket.data["user_id"] = userId;
+                responsePacket.data["message"] = "Успешный вход!";
+            } else {
+                responsePacket.type = PacketType::ERROR_RESPONSE;
+                responsePacket.data["message"] = "Неверный логин или пароль.";
+            }
+
+
+
+        } else if (incomingPacket.type == PacketType::REGISTER) {
+            std::string username = incomingPacket.data["username"];
+            std::string password = incomingPacket.data["password"];
+
+            bool success = DataBaseManager::getInstance().registerUser(username, password);
+            if (success) {
+                responsePacket.type = PacketType::SUCCESS_RESPONSE;
+                responsePacket.data["message"] = "Регистрация прошла успешно!";
+            } else {
+                responsePacket.type = PacketType::ERROR_RESPONSE;
+                responsePacket.data["message"] = "Ошибка регистрации. Возможно, логин уже используется.";
+            }
+
+
+
+        } else if (incomingPacket.type == PacketType::CREATE_CHAT) {
+            int senderId = incomingPacket.data["sender_id"];
+            std::string targetUsername = incomingPacket.data["target_username"];
+
+            int targetId = DataBaseManager::getInstance().getUserIdByUsername(targetUsername);
+
+            if (targetId == -1) {
+                responsePacket.type = PacketType::ERROR_RESPONSE;
+                responsePacket.data["message"] = "Пользователь '" + targetUsername + "' не найден.";
+            } else if (senderId == targetId) {
+                responsePacket.type = PacketType::ERROR_RESPONSE;
+                responsePacket.data["message"] = "Нельзя создать чат с самим собой.";
+            } else {
+                // Сначала проверяем существует ли чат между этими пользователями,
+                // если нет, создаём новый
+                int existingChatId = DataBaseManager::getInstance().getPersonalChat(senderId, targetId);
+
+                if (existingChatId != -1) {
+                    // Чат уже существует, выдаем его ID без создания нового
+                    responsePacket.type = PacketType::SUCCESS_RESPONSE;
+                    responsePacket.data["chat_id"] = existingChatId;
+                    responsePacket.data["message"] = "Чат с " + targetUsername + " уже существует. Вы вошли в него.";
+                } else {
+                    // Чата нет, создаем новый
+                    int newChatId = DataBaseManager::getInstance().createPersonalChat();
+                    if (newChatId != -1) {
+                        DataBaseManager::getInstance().addChatMember(newChatId, senderId);
+                        DataBaseManager::getInstance().addChatMember(newChatId, targetId);
+
+                        responsePacket.type = PacketType::SUCCESS_RESPONSE;
+                        responsePacket.data["chat_id"] = newChatId;
+                        responsePacket.data["message"] = "Чат с " + targetUsername + " успешно создан!";
+                    } else {
+                        responsePacket.type = PacketType::ERROR_RESPONSE;
+                        responsePacket.data["message"] = "Ошибка БД при создании чата.";
+                    }
+                }
+            }
+
+
+    
+        } else if (incomingPacket.type == PacketType::SEND_MESSAGE) {
+            int senderId = incomingPacket.data["sender_id"];
+            int chatId = incomingPacket.data["chat_id"];
+            std::string text = incomingPacket.data["message"];
+
+            bool isSaved = DataBaseManager::getInstance().saveMessage(chatId, senderId, text);
+            if (isSaved) {
+                responsePacket.type = PacketType::SUCCESS_RESPONSE;
+                responsePacket.data["status"] = "OK";
+                responsePacket.data["message"] = "Сообщение сохранено";
+            } else {
+                responsePacket.type = PacketType::ERROR_RESPONSE;
+                responsePacket.data["message"] = "Ошибка БД при сохранении сообщения";
+            }
+        } 
             
+        // Отправляем ответ клиенту
+        std::string responseStr = responsePacket.serialize();
+
+        // Для надежной передачи данных по сети, особенно если сообщения могут быть длинными
+        // полезно сначала отправлять размер сообщения, а затем само сообщение. 
+        // Это позволяет клиенту знать, сколько байт ожидать.
+        uint32_t responseSize = htonl(responseStr.size());
+
+        // Отправляем размер ответа, а затем само сообщение
+        send(clientSocket, &responseSize, sizeof(responseSize), 0);
+        
+        // send - отправляет данные клиенту. Возвращает количество байт, отправленных клиенту
+        ssize_t bytesSent = send(clientSocket, responseStr.c_str(), responseStr.size(), 0);
+
+        if (bytesSent < 0) {
+            Logger::getInstance().log("Ошибка при отправке данных клиенту.", LogLevel::ERROR);
+        } else {
+            Logger::getInstance().log("Ответ успешно отправлен клиенту: " + responseStr, LogLevel::DEBUG);
+        }
+
+        } catch (const std::exception& e) {
+            Logger::getInstance().log("Ошибка JSON: " + std::string(e.what()), LogLevel::ERROR);
             Packet error;
             error.type = PacketType::ERROR_RESPONSE;
-            error.data["info"] = "Неверный формат JSON";
+            error.data["message"] = "Неверный формат пакета";
             std::string errorStr = error.serialize();
-            send(clientSocket, errorStr.c_str(), errorStr.length() + 1, 0);
-        }
-    } 
-    else if (bytesRead == 0) {
-        Logger::getInstance().log("Клиент разорвал соединение до отправки данных.", LogLevel::WARNING);
-    } 
-    else {
-        Logger::getInstance().log("Ошибка при чтении из сокета (recv).", LogLevel::ERROR);
-    }
 
+            uint32_t errorSize = htonl(errorStr.size());
+
+            // Отправляем размер ответа, а затем само сообщение
+            send(clientSocket, &errorSize, sizeof(errorSize), 0);
+
+            send(clientSocket, errorStr.c_str(), errorStr.size(), 0);
+        }
+    }
+    
     // Закрываем сокет клиента после обслуживания
     close(clientSocket);
     Logger::getInstance().log("Клиент отключился. Поток завершён. Сокет закрыт.", LogLevel::INFO);
