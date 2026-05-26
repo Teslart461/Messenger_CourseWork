@@ -25,6 +25,18 @@ inline std::string packetTypeToString(PacketType type) {
         case PacketType::SEND_MESSAGE:
             return "send_message";
 
+        case PacketType::GET_CHATS:
+            return "get_chats";
+
+        case PacketType::GET_CHAT_HISTORY:
+            return "get_chat_history";
+
+        case PacketType::CHAT_LIST_RESPONSE:
+            return "chat_list_response";
+        
+        case PacketType::HISTORY_RESPONSE:
+            return "history_response";
+
         case PacketType::SUCCESS_RESPONSE:
             return "success_response";
 
@@ -55,6 +67,22 @@ inline PacketType stringToPacketType(const std::string& type) {
 
     if (type == "send_message") {
         return PacketType::SEND_MESSAGE;
+    }
+
+    if (type == "get_chats") {
+        return PacketType::GET_CHATS;
+    }
+
+    if (type == "get_chat_history") {
+        return PacketType::GET_CHAT_HISTORY;
+    }
+
+    if (type == "chat_list_response") {
+        return PacketType::CHAT_LIST_RESPONSE;
+    }
+
+    if (type == "history_response") {
+        return PacketType::HISTORY_RESPONSE;
     }
 
     if (type == "success_response") {
