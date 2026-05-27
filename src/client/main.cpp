@@ -221,6 +221,19 @@ int main() {
             }
 
             if (choice == logoutOption) {
+                // Сообщаем серверу о выходе из аккаунта
+                Packet logoutPacket;
+                logoutPacket.type = PacketType::LOGOUT;
+                client.sendMessage(logoutPacket.serialize());
+
+                client.waitForResponse();
+
+                // Очищаем локальное состояние
+                {
+                    std::lock_guard<std::mutex> lock(chatNamesMutex);
+                    chatNamesMap.clear();
+                }
+            
                 myUserId = -1;
                 myChatId = -1;
                 currentChatName.clear();

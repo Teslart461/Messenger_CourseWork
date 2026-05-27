@@ -19,6 +19,9 @@ inline std::string packetTypeToString(PacketType type) {
         case PacketType::LOGIN:
             return "login";
 
+        case PacketType::LOGOUT:
+            return "logout";
+
         case PacketType::CREATE_CHAT:
             return "create_chat";
 
@@ -62,6 +65,10 @@ inline PacketType stringToPacketType(const std::string& type) {
 
     if (type == "login") {
         return PacketType::LOGIN;
+    }
+
+    if (type == "logout") {
+        return PacketType::LOGOUT;
     }
 
     if (type == "create_chat") {

@@ -114,6 +114,11 @@ int Server::getOnlineUserSocket(int userId) {
     return (it != onlineUsers.end()) ? it->second : -1;
 }
 
+bool Server::isUserOnline(int userId) {
+    std::lock_guard<std::mutex> lock(onlineUsersMutex);
+    return onlineUsers.find(userId) != onlineUsers.end();
+}
+
 // Метод для обслуживания конкретного клиента. Запускается в отдельном потоке.
 void Server::handleClient(int clientSocket) {
     Logger::getInstance().log("Начало обслуживания клиента в новом потоке. Для обслуживаемого сокета: " + std::to_string(clientSocket), LogLevel::DEBUG);
@@ -172,6 +177,13 @@ void Server::handleClient(int clientSocket) {
                 
             int userId = DataBaseManager::getInstance().authenticateUser(username, password);
             if (userId != -1) {
+                // Проверяем, не онлайн ли уже пользователь
+                if (isUserOnline(userId)) {
+
+                    responsePacket.type = PacketType::ERROR_RESPONSE;
+                    responsePacket.data["message"] = "Пользователь уже вошёл в систему.";
+
+                } else {
                 // Добавляем пользователя в онлайн
                 addOnlineUser(userId, clientSocket);
                 currentUserId = userId; // Сохраняем ID текущего пользователя для этого сокета
@@ -179,6 +191,7 @@ void Server::handleClient(int clientSocket) {
                 responsePacket.type = PacketType::SUCCESS_RESPONSE;
                 responsePacket.data["user_id"] = userId;
                 responsePacket.data["message"] = "Успешный вход!";
+                }
             } else {
                 responsePacket.type = PacketType::ERROR_RESPONSE;
                 responsePacket.data["message"] = "Неверный логин или пароль.";
@@ -198,6 +211,19 @@ void Server::handleClient(int clientSocket) {
                 responsePacket.type = PacketType::ERROR_RESPONSE;
                 responsePacket.data["message"] = "Ошибка регистрации. Возможно, логин уже используется.";
             }
+
+
+        } else if (incomingPacket.type == PacketType::LOGOUT) {
+                if (currentUserId != -1) {
+                    removeOnlineUser(currentUserId);
+                    currentUserId = -1;
+
+                    responsePacket.type = PacketType::SUCCESS_RESPONSE;
+                    responsePacket.data["message"] = "Вы вышли из аккаунта.";
+                } else {
+                    responsePacket.type = PacketType::ERROR_RESPONSE;
+                    responsePacket.data["message"] = "Вы не авторизованы.";
+                }
 
 
 
@@ -365,7 +391,7 @@ void Server::handleClient(int clientSocket) {
     
     // Удаляем пользователя из онлайна при отключении
     if (currentUserId != -1) {
-    removeOnlineUser(currentUserId);
+        removeOnlineUser(currentUserId);
     }
 
     // Закрываем сокет клиента после обслуживания
