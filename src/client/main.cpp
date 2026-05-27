@@ -4,6 +4,8 @@
 #include <string>
 #include <iostream>
 #include <atomic>
+#include <unordered_map>
+#include <mutex>
 
 /**
  * @brief Состояния интерфейса приложения
@@ -60,12 +62,16 @@ int main() {
     std::atomic<int> myChatId{-1};
     std::string currentChatName;  // Только на главный поток 
 
+    std::unordered_map<int, std::string> chatNamesMap; // Хранит ID чата -> имя чата для отображения в уведомлениях
+    std::mutex chatNamesMutex; // Мьютекс для синхронизации доступа к chatNamesMap
+
     // Callback для асинхронных новых сообщений (вызывается из фонового потока)
     auto onNewMessage = [&](const Packet& pkt) {
         int chatId = pkt.data["chat_id"];
         int senderId = pkt.data["sender_id"];
         std::string senderUsername = pkt.data.value("sender_username", "Unknown");
         std::string text = pkt.data["message"];
+        std::string chatName = "Неизвестный чат";
 
         std::cout << "\n";  // Не ломаем ввод пользователя
 
@@ -74,8 +80,16 @@ int main() {
             std::string author = (senderId == myUserId) ? "Вы" : senderUsername; 
             std::cout << "[НОВОЕ] " << author << ": " << text << "\n";
         } else {
+            {
+                std::lock_guard<std::mutex> lock(chatNamesMutex);
+
+                auto it = chatNamesMap.find(chatId);
+                if (it != chatNamesMap.end()) {
+                    chatName = it->second;
+                }
+}
             // Сообщение в другом чате или мы в меню
-            std::cout << "[УВЕДОМЛЕНИЕ] Новое сообщение в чате " << chatId << "!\n";
+            std::cout << "[УВЕДОМЛЕНИЕ] Новое сообщение в чате " << chatName << "!\n";
         }
         std::cout << "> " << std::flush;  // Возвращаем приглашение ввода
     };
@@ -175,9 +189,17 @@ int main() {
                     for (const auto& chat : chats) {
                         int cid = chat["chat_id"];
                         std::string cname = chat["chat_name"];
+
+                        { // Сохраняем имя чата в map для отображения в уведомлениях
+                            std::lock_guard<std::mutex> lock(chatNamesMutex);
+                            chatNamesMap[cid] = cname;
+                        }   
+
                         std::cout << optionNumber << ". " << cname << "\n";
+
                         chatIds.push_back(cid);
                         chatNames.push_back(cname);
+
                         optionNumber++;
                     }
                 } else {
@@ -223,6 +245,13 @@ int main() {
                 if (createResp.type == PacketType::SUCCESS_RESPONSE) {
                     myChatId = createResp.data["chat_id"];
                     currentChatName = targetUsername;
+
+                    // Добавляем имя чата в map сразу после создания
+                    {
+                        std::lock_guard<std::mutex> lock(chatNamesMutex);
+                        chatNamesMap[(int)myChatId] = targetUsername;
+                    }
+
                     currentState = AppState::IN_CHAT;
                 } else {
                     std::cout << "Ошибка: " << createResp.data["message"].get<std::string>() << "\n";
