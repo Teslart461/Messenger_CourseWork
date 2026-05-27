@@ -175,26 +175,32 @@ Packet Client::waitForResponse() {
 
 void Client::disconnect() {
     // Проверяем, что сокет открыт и клиент подключен, прежде чем пытаться отключиться
-    if (isConnected) {
-        // Устанавливаем флаг listening в false, чтобы остановить фоновый поток прослушивания
-        listening = false;
-        isConnected = false;
-
-        // Закрываем сокет, чтобы разблокировать recv в listenLoop
-        if (clientSocket >= 0) {
-            close(clientSocket);
-            clientSocket = -1;
-        }
-
-        // Будим главный поток, если он ждал ответа
-        cv.notify_all();
-
-        // Ждём завершения фонового потока
-        if (listenerThread.joinable()) {
-            listenerThread.join();
-        }
-
-        Logger::getInstance().log("Отключение от сервера", LogLevel::INFO);
-        std::cout << "Отключился от сервера." << std::endl;
+    if (!isConnected.exchange(false)) {
+        return;
     }
+
+    // Устанавливаем флаг listening в false, чтобы остановить фоновый поток прослушивания
+    listening = false;
+
+    // Разбудить recv()
+    if (clientSocket >= 0) {
+        shutdown(clientSocket, SHUT_RDWR);
+    }
+
+    // Будим главный поток, если он ждал ответа
+    cv.notify_all();
+
+    // Дожидаемся потока
+    if (listenerThread.joinable()) {
+        listenerThread.join();
+    }
+
+    // Теперь окончательно закрываем 
+    if (clientSocket >= 0) {
+        close(clientSocket);
+        clientSocket = -1;
+    }
+
+    Logger::getInstance().log("Отключение от сервера", LogLevel::INFO);
+    std::cout << "Отключился от сервера." << std::endl;
 }

@@ -14,12 +14,12 @@
 class Client {
 private:
     int clientSocket; // Файловый дескриптор сокета клиента
-    bool isConnected; // Флаг, указывающий, подключен ли клиент к серверу
+    std::atomic<bool> isConnected{false}; // Флаг, указывающий, подключен ли клиент к серверу
 
     std::thread listenerThread; // Поток для прослушивания входящих сообщений от сервера
     std::atomic<bool> listening{false}; // Флаг для контроля работы потока прослушивания
     
-    std::queue<Packet> responseQueue;; // Очередь для хранения входящих сообщений от сервера
+    std::queue<Packet> responseQueue; // Очередь для хранения входящих сообщений от сервера
     std::mutex queueMutex; // Мьютекс для синхронизации доступа к очереди входящих сообщений
     std::condition_variable cv; // Условная переменная для уведомления о новых сообщениях в очереди
     

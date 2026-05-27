@@ -70,7 +70,7 @@ void Server::start() {
     isRunning = true;
 
     // Бесконечный цикл для принятия клиентов (accept)
-    while (isRunning) {
+    while (isRunning && !shutdownFlag) {
         sockaddr_in clientAddress{};
         socklen_t clientSize = sizeof(clientAddress);
 
@@ -381,6 +381,6 @@ void Server::stop() {
             close(serverSocket); // close - закрывает файловый дескриптор сокета
             serverSocket = -1;
         }
-        Logger::getInstance().log("Сервер остановлен", LogLevel::INFO);
+        Logger::getInstance().log("Сервер завершает работу...", LogLevel::INFO);
     }
 }

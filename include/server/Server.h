@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <thread>
 #include <mutex>
+#include <atomic>
 #include <unordered_map>
 
 class Server {
@@ -12,6 +13,7 @@ private:
     int serverSocket; // Файловый дескриптор главного сокета
     uint16_t port; // Порт, на котором сервер будет слушать входящие соединения
     bool isRunning; // Флаг для контроля работы сервера
+    std::atomic<bool> shutdownFlag{false}; // Флаг для безопасного завершения работы сервера
 
     // Хранилище онлайн-пользователей: userId -> clientSocket
     std::unordered_map<int, int> onlineUsers;
