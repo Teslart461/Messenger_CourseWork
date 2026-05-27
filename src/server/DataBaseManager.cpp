@@ -286,6 +286,34 @@ int DataBaseManager::getUserIdByUsername(const std::string& username) {
     return userId;
 }
 
+std::string DataBaseManager::getUsernameById(int userId) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return "Unknown";
+
+    // SQL-запрос для получения логина пользователя по его ID
+    const char* sql = "SELECT username FROM users WHERE id = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    std::string username = "Unknown";
+
+    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем "Unknown"
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, userId);
+
+        // Выполняем запрос. Если результат SQLITE_ROW, значит найден пользователь с таким ID, и мы можем получить его логин
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* text = sqlite3_column_text(stmt, 0);
+            if (text) {
+                username = reinterpret_cast<const char*>(text);
+            }
+        }
+    }
+
+    // Освобождаем ресурсы, связанные с подготовленным запросом
+    sqlite3_finalize(stmt);
+    return username;
+}
+
 bool DataBaseManager::addChatMember(int chatId, int userId) {
     std::lock_guard<std::mutex> lock(dbMutex);
 

@@ -127,6 +127,13 @@ public:
     int getUserIdByUsername(const std::string& username);
 
     /**
+     * @brief Получить логин пользователя по его ID.
+     * @param userId ID пользователя.
+     * @return Логин или "Unknown", если не найден.
+     */
+    std::string getUsernameById(int userId);
+
+    /**
      * @brief Добавить пользователя в чат.
      * @param chatId ID чата.
      * @param userId ID пользователя.

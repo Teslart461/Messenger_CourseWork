@@ -261,9 +261,13 @@ void Server::handleClient(int clientSocket) {
                 int receiverSocket = getOnlineUserSocket(receiverId);
         
                 if (receiverSocket != -1) {
+                    // Получаем username отправителя
+                    std::string senderUsername = DataBaseManager::getInstance().getUsernameById(senderId);
+
                     Packet notifyPacket;
                     notifyPacket.type = PacketType::NEW_MESSAGE;
                     notifyPacket.data["sender_id"] = senderId;
+                    notifyPacket.data["sender_username"] = senderUsername;
                     notifyPacket.data["chat_id"] = chatId;
                     notifyPacket.data["message"] = text;
             

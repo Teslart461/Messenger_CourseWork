@@ -58,19 +58,20 @@ int main() {
     std::atomic<AppState> currentState{AppState::AUTH};
     std::atomic<int> myUserId{-1};
     std::atomic<int> myChatId{-1};
-    std::string currentChatName;  // Только главный поток пишет, фоновый — читает
+    std::string currentChatName;  // Только на главный поток 
 
     // Callback для асинхронных новых сообщений (вызывается из фонового потока)
     auto onNewMessage = [&](const Packet& pkt) {
         int chatId = pkt.data["chat_id"];
         int senderId = pkt.data["sender_id"];
+        std::string senderUsername = pkt.data.value("sender_username", "Unknown");
         std::string text = pkt.data["message"];
 
         std::cout << "\n";  // Не ломаем ввод пользователя
 
         if (currentState == AppState::IN_CHAT && chatId == myChatId) {
             // Сообщение в текущем чате — показываем сразу
-            std::string author = (senderId == myUserId) ? "Вы" : currentChatName;
+            std::string author = (senderId == myUserId) ? "Вы" : senderUsername; 
             std::cout << "[НОВОЕ] " << author << ": " << text << "\n";
         } else {
             // Сообщение в другом чате или мы в меню
