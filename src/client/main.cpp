@@ -3,6 +3,7 @@
 
 #include <string>
 #include <iostream>
+#include <atomic>
 
 /**
  * @brief Состояния интерфейса приложения
@@ -52,11 +53,34 @@ int main() {
         return 1;
     }
 
-    // Состояние сессии клиента
-    AppState currentState = AppState::AUTH; // Изначально пользователь должен авторизоваться или зарегистрироваться
-    int myUserId = -1; // Идентификатор пользователя
-    int myChatId = -1; // Идентификатор чата
-    std::string currentChatName; // Название текущего чата
+    // Разделяемые переменные между главным и фоновым потоками.
+    // std::atomic гарантирует отсутствие гонки данных.
+    std::atomic<AppState> currentState{AppState::AUTH};
+    std::atomic<int> myUserId{-1};
+    std::atomic<int> myChatId{-1};
+    std::string currentChatName;  // Только главный поток пишет, фоновый — читает
+
+    // Callback для асинхронных новых сообщений (вызывается из фонового потока)
+    auto onNewMessage = [&](const Packet& pkt) {
+        int chatId = pkt.data["chat_id"];
+        int senderId = pkt.data["sender_id"];
+        std::string text = pkt.data["message"];
+
+        std::cout << "\n";  // Не ломаем ввод пользователя
+
+        if (currentState == AppState::IN_CHAT && chatId == myChatId) {
+            // Сообщение в текущем чате — показываем сразу
+            std::string author = (senderId == myUserId) ? "Вы" : currentChatName;
+            std::cout << "[НОВОЕ] " << author << ": " << text << "\n";
+        } else {
+            // Сообщение в другом чате или мы в меню
+            std::cout << "[УВЕДОМЛЕНИЕ] Новое сообщение в чате " << chatId << "!\n";
+        }
+        std::cout << "> " << std::flush;  // Возвращаем приглашение ввода
+    };
+
+    // Запускаем фоновый слушатель
+    client.startListening(onNewMessage);
 
     while (true) {
         clearConsole();
@@ -106,21 +130,14 @@ int main() {
             requestPacket.data["password"] = password;
             client.sendMessage(requestPacket.serialize());
             
-            // Получаем ответ
-            std::string responseData = client.receiveData();
-            if (responseData.empty()) {
-                std::cout << "Сервер не отвечает.\n";
-                pressEnterToContinue();
-                continue;
-            }
-
-            Packet resp = Packet::deserialize(responseData);
+            // Ждём ответ (главный поток спит на condition_variable)
+            Packet resp = client.waitForResponse();
 
             // Если вход успешен, переходим в главное меню
             if (resp.type == PacketType::SUCCESS_RESPONSE) {
                 if (choice == 1) { // LOGIN
                     myUserId = resp.data["user_id"];
-                    std::cout << "Успех! Ваш ID: " << myUserId << "\n";
+                    std::cout << "Успешный вход! Ваш ID: " << myUserId << "\n";
                     pressEnterToContinue();
                     currentState = AppState::MAIN_MENU; // Переходим в главное меню
                 } else {
@@ -141,18 +158,10 @@ int main() {
             // Запрашиваем список чатов
             Packet requestPacket;
             requestPacket.type = PacketType::GET_CHATS;
-            requestPacket.data["user_id"] = myUserId;
+            requestPacket.data["user_id"] = (int)myUserId;
             client.sendMessage(requestPacket.serialize());
 
-            // Получаем ответ
-            std::string responseData = client.receiveData();
-            if (responseData.empty()) {
-                std::cout << "Сервер не отвечает.\n";
-                pressEnterToContinue();
-                continue;
-            }
-
-            Packet resp = Packet::deserialize(responseData);
+            Packet resp = client.waitForResponse();
 
             int optionNumber = 1;
             std::vector<int> chatIds;      // Параллельный вектор с ID чатов
@@ -176,8 +185,7 @@ int main() {
             }
 
             std::cout << "\n" << optionNumber << ". Создать новый чат\n";
-            int createChatOption = optionNumber;
-            optionNumber++;
+            int createChatOption = optionNumber++;
             std::cout << optionNumber << ". Выйти из аккаунта\n";
             int logoutOption = optionNumber;
             std::cout << "0. Выйти из приложения\n\n";
@@ -204,16 +212,13 @@ int main() {
 
                 if (targetUsername.empty()) continue;
 
-                Packet req;
-                req.type = PacketType::CREATE_CHAT;
-                req.data["sender_id"] = myUserId;
-                req.data["target_username"] = targetUsername;
-                client.sendMessage(req.serialize());
+                Packet createReq;
+                createReq.type = PacketType::CREATE_CHAT;
+                createReq.data["sender_id"] = (int)myUserId;
+                createReq.data["target_username"] = targetUsername;
+                client.sendMessage(createReq.serialize());
 
-                std::string respData = client.receiveData();
-                if (respData.empty()) continue;
-
-                Packet createResp = Packet::deserialize(respData);
+                Packet createResp = client.waitForResponse();
                 if (createResp.type == PacketType::SUCCESS_RESPONSE) {
                     myChatId = createResp.data["chat_id"];
                     currentChatName = targetUsername;
@@ -240,23 +245,15 @@ int main() {
             // Запрашиваем историю
             Packet reqHistory;
             reqHistory.type = PacketType::GET_CHAT_HISTORY;
-            reqHistory.data["chat_id"] = myChatId;
+            reqHistory.data["chat_id"] = (int)myChatId;
             client.sendMessage(reqHistory.serialize());
 
-            std::string responseData = client.receiveData();
-            if (responseData.empty()) {
-                std::cout << "Сервер не отвечает.\n";
-                pressEnterToContinue();
-                currentState = AppState::MAIN_MENU;
-                continue;
-            }
-
-            Packet resp = Packet::deserialize(responseData);
+            Packet respHistory = client.waitForResponse();
 
             std::cout << "\n=== " << currentChatName << " ===\n\n";
 
-            if (resp.type == PacketType::HISTORY_RESPONSE) {
-                auto history = resp.data["history"];
+            if (respHistory.type == PacketType::HISTORY_RESPONSE) {
+                auto history = respHistory.data["history"];
                 if (!history.empty()) {
                     for (const auto& msg : history) {
                         int sender = msg["sender_id"];
@@ -290,13 +287,13 @@ int main() {
             // Отправляем сообщение
             Packet reqSend;
             reqSend.type = PacketType::SEND_MESSAGE;
-            reqSend.data["sender_id"] = myUserId;
-            reqSend.data["chat_id"] = myChatId;
+            reqSend.data["sender_id"] = (int)myUserId;
+            reqSend.data["chat_id"] = (int)myChatId;
             reqSend.data["message"] = text;
             client.sendMessage(reqSend.serialize());
 
-            // Ждём подтверждение
-            client.receiveData();
+            // Ждём подтверждение от сервера
+            client.waitForResponse();
         }
     }
             

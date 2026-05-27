@@ -38,6 +38,8 @@ bool Client::connectToServer(const std::string& ip, uint16_t port) {
     if (inet_pton(AF_INET, ip.c_str(), &serverAddress.sin_addr) <= 0) {
         Logger::getInstance().log("Неверный IP-адрес", LogLevel::ERROR);
         std::cerr << "Неверный IP-адрес." << std::endl;
+        close(clientSocket);
+        clientSocket = -1;
         return false;
     }
 
@@ -45,6 +47,8 @@ bool Client::connectToServer(const std::string& ip, uint16_t port) {
     if (connect(clientSocket, (sockaddr*)&serverAddress, sizeof(serverAddress)) < 0) {
         Logger::getInstance().log("Ошибка подключения к серверу", LogLevel::ERROR);
         std::cerr << "Не удалось подключиться к серверу." << std::endl;
+        close(clientSocket);
+        clientSocket = -1;
         return false;
     }
 
@@ -80,45 +84,115 @@ bool Client::sendMessage(const std::string& message) {
     return true;
 }
 
-std::string Client::receiveData() {
-    // Проверяем, что клиент подключен, прежде чем пытаться получить данные от сервера
-    if (!isConnected) {
-        return "";
-    }
+std::string Client::receiveRaw() {
+    if (!isConnected) return "";
 
-    // Получаем данные от сервера. Для надежности сначала читаем размер сообщения, а затем само сообщение
+    // Читаем префикс длины
     uint32_t messageSize = 0;
-
-    // Получаем размер сообщения
-    // MSG_WAITALL - флаг, который заставляет recv ждать, пока не будет получено указанное количество байт
     ssize_t sizeRead = recv(clientSocket, &messageSize, sizeof(messageSize), MSG_WAITALL);
 
     if (sizeRead <= 0) {
+        isConnected = false;
         return "";
     }
 
-    // ntohl (Network TO Host Long) - переводит число из сетевого порядка байт (Big-Endian) в порядок байт хоста
     uint32_t packetSize = ntohl(messageSize);
 
-    // Создаем строку нужного размера для получения сообщения
+    // Читаем тело сообщения
     std::string buffer(packetSize, '\0');
-
-    // Получаем всё сообщение
     ssize_t bytesRead = recv(clientSocket, buffer.data(), packetSize, MSG_WAITALL);
 
     if (bytesRead <= 0) {
+        isConnected = false;
         return "";
     }
 
     return buffer;
 }
 
+void Client::startListening(std::function<void(const Packet&)> onNewMessage) {
+    if (!isConnected) return;
+
+    listening = true;
+    // Запускаем фоновый поток для прослушивания сообщений от сервера
+    listenerThread = std::thread(&Client::listenLoop, this, onNewMessage);
+}
+
+void Client::listenLoop(std::function<void(const Packet&)> onNewMessage) {
+    while (listening && isConnected) {
+        std::string rawData = receiveRaw();
+        if (rawData.empty()) {
+            // Соединение разорвано
+            if (listening) {
+                std::cerr << "\n[СИСТЕМА] Потеряно соединение с сервером.\n";
+                isConnected = false;
+                cv.notify_all();  // Разблокируем главный поток
+            }
+            break;
+        }
+
+        try {
+            Packet incomingPacket = Packet::deserialize(rawData);
+
+            // Диспетчеризация пакетов
+            if (incomingPacket.type == PacketType::NEW_MESSAGE) {
+                // Асинхронное событие — немедленно вызываем callback
+                if (onNewMessage) {
+                    onNewMessage(incomingPacket);
+                }
+            } else {
+                // Ответ на запрос главного потока — кладём в очередь
+                std::lock_guard<std::mutex> lock(queueMutex);
+                responseQueue.push(incomingPacket);
+                cv.notify_one();  // Будим главный поток
+            }
+        } catch (const std::exception& e) {
+            Logger::getInstance().log("Ошибка десериализации: " + std::string(e.what()), LogLevel::ERROR);
+        }
+    }
+}
+
+Packet Client::waitForResponse() {
+    std::unique_lock<std::mutex> lock(queueMutex);
+
+    // Ждём, пока в очереди появится пакет или соединение не закроется
+    cv.wait(lock, [this]() {
+        return !responseQueue.empty() || !isConnected;
+    });
+
+    if (!isConnected && responseQueue.empty()) {
+        // Соединение потеряно, а ответа нет — возвращаем пустой пакет ошибки
+        Packet errorPacket;
+        errorPacket.type = PacketType::ERROR_RESPONSE;
+        errorPacket.data["message"] = "Соединение с сервером потеряно.";
+        return errorPacket;
+    }
+
+    Packet resp = responseQueue.front();
+    responseQueue.pop();
+    return resp;
+}
+
 void Client::disconnect() {
     // Проверяем, что сокет открыт и клиент подключен, прежде чем пытаться отключиться
     if (isConnected) {
-        close(clientSocket);
-        clientSocket = -1;
+        // Устанавливаем флаг listening в false, чтобы остановить фоновый поток прослушивания
+        listening = false;
         isConnected = false;
+
+        // Закрываем сокет, чтобы разблокировать recv в listenLoop
+        if (clientSocket >= 0) {
+            close(clientSocket);
+            clientSocket = -1;
+        }
+
+        // Будим главный поток, если он ждал ответа
+        cv.notify_all();
+
+        // Ждём завершения фонового потока
+        if (listenerThread.joinable()) {
+            listenerThread.join();
+        }
 
         Logger::getInstance().log("Отключение от сервера", LogLevel::INFO);
         std::cout << "Отключился от сервера." << std::endl;

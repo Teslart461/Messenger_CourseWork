@@ -3,11 +3,37 @@
 
 #include <string>
 #include <cstdint>
+#include <thread>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
+#include <atomic>
+#include "common/Packet.h"
 
 class Client {
 private:
     int clientSocket; // Файловый дескриптор сокета клиента
     bool isConnected; // Флаг, указывающий, подключен ли клиент к серверу
+
+    std::thread listenerThread; // Поток для прослушивания входящих сообщений от сервера
+    std::atomic<bool> listening{false}; // Флаг для контроля работы потока прослушивания
+    
+    std::queue<Packet> responseQueue;; // Очередь для хранения входящих сообщений от сервера
+    std::mutex queueMutex; // Мьютекс для синхронизации доступа к очереди входящих сообщений
+    std::condition_variable cv; // Условная переменная для уведомления о новых сообщениях в очереди
+    
+    /**
+     * @brief Цикл приёма данных (выполняется в фоновом потоке).
+     * @param onNewMessage Callback для асинхронных событий (NEW_MESSAGE).
+     */
+    void listenLoop(std::function<void(const Packet&)> onNewMessage);
+
+    /**
+     * @brief Принять одно сообщение с префиксом длины.
+     * @return Строка с данными или пустая строка при ошибке.
+     */
+    std::string receiveRaw();
 
 public:
     /**
@@ -36,10 +62,16 @@ public:
     bool sendMessage(const std::string& message);
 
     /**
-    * @brief Получение данных от сервера.
-    * @return Строка с полученными данными
-    */
-    std::string receiveData();
+     * @brief Запустить фоновый поток-слушатель.
+     * @param onNewMessage Callback для NEW_MESSAGE (вызывается в фоновом потоке).
+     */
+    void startListening(std::function<void(const Packet&)> onNewMessage);
+
+    /**
+     * @brief Дождаться ответа от сервера (блокирует главный поток).
+     * @return Пакет с ответом.
+     */
+    Packet waitForResponse();
 
     /**
      * @brief Получение сообщения от сервера

@@ -34,7 +34,6 @@ add_executable(client
     src/client/main.cpp
     src/common/Logger.cpp
     src/client/Client.cpp
-    src/common/Hasher.cpp
 )
 target_link_libraries(client Threads::Threads)
 target_link_libraries(client OpenSSL::SSL OpenSSL::Crypto)

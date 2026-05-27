@@ -96,9 +96,30 @@ void Server::start() {
     }   
 }
 
+void Server::addOnlineUser(int userId, int clientSocket) {
+    std::lock_guard<std::mutex> lock(onlineUsersMutex);
+    onlineUsers[userId] = clientSocket;
+    Logger::getInstance().log("Пользователь " + std::to_string(userId) + " теперь онлайн.", LogLevel::INFO);
+}
+
+void Server::removeOnlineUser(int userId) {
+    std::lock_guard<std::mutex> lock(onlineUsersMutex);
+    onlineUsers.erase(userId);
+    Logger::getInstance().log("Пользователь " + std::to_string(userId) + " отключился.", LogLevel::INFO);
+}
+
+int Server::getOnlineUserSocket(int userId) {
+    std::lock_guard<std::mutex> lock(onlineUsersMutex);
+    auto it = onlineUsers.find(userId);
+    return (it != onlineUsers.end()) ? it->second : -1;
+}
+
 // Метод для обслуживания конкретного клиента. Запускается в отдельном потоке.
 void Server::handleClient(int clientSocket) {
     Logger::getInstance().log("Начало обслуживания клиента в новом потоке. Для обслуживаемого сокета: " + std::to_string(clientSocket), LogLevel::DEBUG);
+
+    // Локальное состояние сессии: сервер знает, кто именно сидит на этом сокете
+    int currentUserId = -1;
 
     while(true){
         // Для надежной передачи данных по сети, особенно если сообщения могут быть длинными
@@ -151,6 +172,10 @@ void Server::handleClient(int clientSocket) {
                 
             int userId = DataBaseManager::getInstance().authenticateUser(username, password);
             if (userId != -1) {
+                // Добавляем пользователя в онлайн
+                addOnlineUser(userId, clientSocket);
+                currentUserId = userId; // Сохраняем ID текущего пользователя для этого сокета
+
                 responsePacket.type = PacketType::SUCCESS_RESPONSE;
                 responsePacket.data["user_id"] = userId;
                 responsePacket.data["message"] = "Успешный вход!";
@@ -222,11 +247,33 @@ void Server::handleClient(int clientSocket) {
             int chatId = incomingPacket.data["chat_id"];
             std::string text = incomingPacket.data["message"];
 
+            // Сохраняем сообщение в БД
             bool isSaved = DataBaseManager::getInstance().saveMessage(chatId, senderId, text);
+
             if (isSaved) {
+                // Если сообщение успешно сохранено, формируем успешный ответ
                 responsePacket.type = PacketType::SUCCESS_RESPONSE;
                 responsePacket.data["status"] = "OK";
                 responsePacket.data["message"] = "Сообщение сохранено";
+
+                // Пересылаем второму участнику, если он онлайн
+                int receiverId = DataBaseManager::getInstance().getOtherChatMember(chatId, senderId);
+                int receiverSocket = getOnlineUserSocket(receiverId);
+        
+                if (receiverSocket != -1) {
+                    Packet notifyPacket;
+                    notifyPacket.type = PacketType::NEW_MESSAGE;
+                    notifyPacket.data["sender_id"] = senderId;
+                    notifyPacket.data["chat_id"] = chatId;
+                    notifyPacket.data["message"] = text;
+            
+                    std::string notifyStr = notifyPacket.serialize();
+                    uint32_t notifySize = htonl(notifyStr.size());
+                    send(receiverSocket, &notifySize, sizeof(notifySize), 0);
+                    send(receiverSocket, notifyStr.c_str(), notifyStr.size(), 0);
+            
+                    Logger::getInstance().log("Уведомление о новом сообщении отправлено пользователю " + std::to_string(receiverId), LogLevel::DEBUG);
+                }
             } else {
                 responsePacket.type = PacketType::ERROR_RESPONSE;
                 responsePacket.data["message"] = "Ошибка БД при сохранении сообщения";
@@ -312,6 +359,11 @@ void Server::handleClient(int clientSocket) {
         }
     }
     
+    // Удаляем пользователя из онлайна при отключении
+    if (currentUserId != -1) {
+    removeOnlineUser(currentUserId);
+    }
+
     // Закрываем сокет клиента после обслуживания
     close(clientSocket);
     Logger::getInstance().log("Клиент отключился. Поток завершён. Сокет закрыт.", LogLevel::INFO);
