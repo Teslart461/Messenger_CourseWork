@@ -216,6 +216,54 @@ int DataBaseManager::createPersonalChat() {
     return chatId;
 }
 
+int DataBaseManager::createGroupChat(const std::string& groupName) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+
+    if (!db) return -1;
+
+    const char* sql = "INSERT INTO chats (type, name) VALUES ('group', ?);";
+    sqlite3_stmt* stmt = nullptr;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Logger::getInstance().log("Ошибка подготовки запроса createGroupChat", LogLevel::ERROR);
+        return -1;
+    }
+
+    sqlite3_bind_text(stmt, 1, groupName.c_str(), -1, SQLITE_TRANSIENT);
+
+    int chatId = -1;
+    if (sqlite3_step(stmt) == SQLITE_DONE) {
+        chatId = sqlite3_last_insert_rowid(db);
+        Logger::getInstance().log("Создан групповой чат '" + groupName + "' с ID: " + std::to_string(chatId), LogLevel::INFO);
+    } else {
+        Logger::getInstance().log("Ошибка создания группы", LogLevel::ERROR);
+    }
+
+    sqlite3_finalize(stmt);
+    return chatId;
+}
+
+bool DataBaseManager::isGroupChat(int chatId) {
+    std::lock_guard<std::mutex> lock(dbMutex);
+    if (!db) return false;
+
+    const char* sql = "SELECT type FROM chats WHERE id = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    bool isGroup = false;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, chatId);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* typeText = sqlite3_column_text(stmt, 0);
+            if (typeText && std::string(reinterpret_cast<const char*>(typeText)) == "group") {
+                isGroup = true;
+            }
+        }
+    }
+    sqlite3_finalize(stmt);
+    return isGroup;
+}
+
 int DataBaseManager::getPersonalChat(int userId1, int userId2) {
     std::lock_guard<std::mutex> lock(dbMutex);
 
@@ -393,22 +441,19 @@ std::vector<ChatInfo> DataBaseManager::getUserChats(int userId) {
     // Для личных чатов: получаем ID чата и логин собеседника.
     // Для групповых: получаем ID чата и название группы из chats.name.
     // Объединяем оба запроса через UNION ALL.
-    const char* sql = R"(
-        SELECT c.id AS chat_id, u.username AS display_name, c.type
+        const char* sql = R"(
+        SELECT c.id, 
+               CASE WHEN c.type = 'group' THEN c.name 
+                    ELSE u.username 
+               END as chat_name,
+               c.type
         FROM chats c
-        JOIN chat_members m1 ON c.id = m1.chat_id AND m1.user_id = ?
-        JOIN chat_members m2 ON c.id = m2.chat_id AND m2.user_id != ?
-        JOIN users u ON m2.user_id = u.id
-        WHERE c.type = 'personal'
-
-        UNION ALL
-
-        SELECT c.id AS chat_id, c.name AS display_name, c.type
-        FROM chats c
-        JOIN chat_members m ON c.id = m.chat_id AND m.user_id = ?
-        WHERE c.type = 'group'
-
-        ORDER BY chat_id;
+        JOIN chat_members m1 ON c.id = m1.chat_id
+        LEFT JOIN chat_members m2 ON c.id = m2.chat_id 
+            AND m2.user_id != ? AND c.type = 'personal'
+        LEFT JOIN users u ON m2.user_id = u.id
+        WHERE m1.user_id = ?
+        ORDER BY c.id;
     )";
 
     sqlite3_stmt* stmt = nullptr;
@@ -420,7 +465,6 @@ std::vector<ChatInfo> DataBaseManager::getUserChats(int userId) {
         // 3-й параметр - userId для групповых чатов
         sqlite3_bind_int(stmt, 1, userId);  // для cm1.user_id (personal)
         sqlite3_bind_int(stmt, 2, userId);  // для cm2.user_id != (personal)
-        sqlite3_bind_int(stmt, 3, userId);  // для cm.user_id (group)
 
         // sqlite3_step возвращает SQLITE_ROW каждый раз, когда находит новую строку
         // Поэтому используем цикл while, чтобы собрать весь список чатов
@@ -433,8 +477,8 @@ std::vector<ChatInfo> DataBaseManager::getUserChats(int userId) {
             info.chatName = nameText ? reinterpret_cast<const char*>(nameText) : "Unknown";
 
             // Получаем тип чата (personal или group)
-            std::string typeStr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-            info.chatType = (typeStr == "group") ? ChatType::GROUP : ChatType::PERSONAL;
+                        const unsigned char* typeText = sqlite3_column_text(stmt, 2);
+            info.isGroup = typeText ? (std::string(reinterpret_cast<const char*>(typeText)) == "group") : false;
             
             chats.push_back(info); // Добавляем информацию о чате в вектор
         }
@@ -455,7 +499,13 @@ std::vector<MessageInfo> DataBaseManager::getChatHistory(int chatId) {
     if (!db) return history;
 
     // Сортировка ASC (Ascending) гарантирует, что старые сообщения будут первыми (сверху)
-    const char* sql = "SELECT sender_id, content, timestamp FROM messages WHERE chat_id = ? ORDER BY id ASC;";
+        const char* sql = R"(
+        SELECT m.sender_id, u.username, m.content, m.timestamp 
+        FROM messages m
+        JOIN users u ON m.sender_id = u.id
+        WHERE m.chat_id = ? 
+        ORDER BY m.timestamp ASC;
+    )";
 
     sqlite3_stmt* stmt = nullptr;
 
@@ -472,11 +522,14 @@ std::vector<MessageInfo> DataBaseManager::getChatHistory(int chatId) {
             msg.senderId = sqlite3_column_int(stmt, 0); // Получаем ID отправителя
             
             // Получаем текст сообщения
-            const unsigned char* contentText = sqlite3_column_text(stmt, 1);
+            const unsigned char* nameText = sqlite3_column_text(stmt, 1);
+            msg.senderName = nameText ? reinterpret_cast<const char*>(nameText) : "Unknown";
+
+            const unsigned char* contentText = sqlite3_column_text(stmt, 2);
             msg.content = contentText ? reinterpret_cast<const char*>(contentText) : "";
             
             // Получаем временную метку сообщения
-            const unsigned char* timeText = sqlite3_column_text(stmt, 2);
+            const unsigned char* timeText = sqlite3_column_text(stmt, 3);
             msg.timestamp = timeText ? reinterpret_cast<const char*>(timeText) : "";
 
             history.push_back(msg); // Добавляем информацию о сообщении в вектор истории
@@ -490,32 +543,29 @@ std::vector<MessageInfo> DataBaseManager::getChatHistory(int chatId) {
     return history;
 }
 
-int DataBaseManager::getOtherChatMember(int chatId, int myUserId) {
+std::vector<int> DataBaseManager::getChatMembers(int chatId, int excludeUserId) {
     std::lock_guard<std::mutex> lock(dbMutex);
 
-    if (!db) return -1;
+    std::vector<int> members;
 
-    // В личном чате ровно 2 участника — находим того, чей ID не равен нашему.
+    if (!db) return members;
+
     const char* sql = "SELECT user_id FROM chat_members WHERE chat_id = ? AND user_id != ?;";
+
     sqlite3_stmt* stmt = nullptr;
-    int otherUserId = -1; // Инициализируем ID собеседника как -1, что будет означать "не найден"
 
-    // Подготавливаем SQL-запрос. Если подготовка не удалась, логируем ошибку и возвращаем -1
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        // Привязываем параметры: 1-й параметр - chatId, 2-й - myUserId
         sqlite3_bind_int(stmt, 1, chatId);
-        sqlite3_bind_int(stmt, 2, myUserId);
+        sqlite3_bind_int(stmt, 2, excludeUserId);
 
-        // Выполняем запрос. Если результат SQLITE_ROW, значит найден другой участник личного чата, и мы можем получить его ID
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            otherUserId = sqlite3_column_int(stmt, 0);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            members.push_back(sqlite3_column_int(stmt, 0));
         }
     } else {
-        Logger::getInstance().log("Ошибка подготовки запроса getOtherChatMember", LogLevel::ERROR);
-        return -1;
+        Logger::getInstance().log("Ошибка подготовки запроса getChatMembers", LogLevel::ERROR);
     }
 
     // Освобождаем ресурсы, связанные с подготовленным запросом
     sqlite3_finalize(stmt);
-    return otherUserId;
+    return members;
 }

@@ -9,20 +9,12 @@
 #include "common/Logger.h"
 
 /**
- * @brief Типы чатов: личный (между двумя пользователями) и групповой (с несколькими участниками).
- */
-enum class ChatType {
-    PERSONAL,
-    GROUP
-};
-
-/**
  * @brief Структура с информацией о чате для списка чатов пользователя.
  */
 struct ChatInfo {
     int chatId;              // ID чата
     std::string chatName;    // Логин собеседника
-    ChatType chatType;       // Тип чата
+    bool isGroup;       // Тип чата
 };
 
 /**
@@ -30,6 +22,7 @@ struct ChatInfo {
  */
 struct MessageInfo {
     int senderId;            // ID отправителя
+    std::string senderName;  // Логин отправителяы
     std::string content;     // Текст сообщения
     std::string timestamp;   // Временная метка в виде строки
 };
@@ -111,6 +104,20 @@ public:
     int createPersonalChat();
 
     /**
+     * @brief Создать новый групповой чат.
+     * @param groupName Название группы.
+     * @return ID созданного чата или -1 при ошибке.
+     */
+    int createGroupChat(const std::string& groupName);
+
+    /**
+     * @brief Проверить, является ли чат групповым.
+     * @param chatId ID чата.
+     * @return true, если чат групповой.
+     */
+    bool isGroupChat(int chatId);
+
+    /**
      * @brief Получить ID сущестсвующего личного чата между двумя пользователями
      * @param userId1 ID первого пользователя
      * @param userId2 ID второго пользователя
@@ -165,12 +172,13 @@ public:
     std::vector<MessageInfo> getChatHistory(int chatId);
 
     /**
-     * @brief Получить ID второго участника личного чата.
+     * @brief Получить ID всех участников чата, кроме указанного.
+     *        Работает и для личных, и для групповых чатов.
      * @param chatId ID чата.
-     * @param myUserId ID текущего пользователя.
-     * @return ID собеседника или -1, если не найден.
+     * @param excludeUserId ID пользователя для исключения.
+     * @return Вектор ID остальных участников.
      */
-    int getOtherChatMember(int chatId, int myUserId);
+    std::vector<int> getChatMembers(int chatId, int excludeUserId);
 };
 
 #endif

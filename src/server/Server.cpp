@@ -227,7 +227,7 @@ void Server::handleClient(int clientSocket) {
 
 
 
-        } else if (incomingPacket.type == PacketType::CREATE_CHAT) {
+        } else if (incomingPacket.type == PacketType::CREATE_PERSONAL_CHAT) {
             int senderId = incomingPacket.data["sender_id"];
             std::string targetUsername = incomingPacket.data["target_username"];
 
@@ -267,7 +267,77 @@ void Server::handleClient(int clientSocket) {
             }
 
 
+
+        } else if (incomingPacket.type == PacketType::CREATE_GROUP_CHAT) {
+            int creatorId = incomingPacket.data["creator_id"];
+            std::string groupName = incomingPacket.data["group_name"];
+
+            if (groupName.empty()) {
+                responsePacket.type = PacketType::ERROR_RESPONSE;
+                responsePacket.data["message"] = "Название группы не может быть пустым.";
+            } else {
+                int chatId = DataBaseManager::getInstance().createGroupChat(groupName);
+                if (chatId != -1) {
+                    DataBaseManager::getInstance().addChatMember(chatId, creatorId);
+
+                    responsePacket.type = PacketType::SUCCESS_RESPONSE;
+                    responsePacket.data["chat_id"] = chatId;
+                    responsePacket.data["chat_name"] = groupName;
+                    responsePacket.data["is_group"] = true;
+                    responsePacket.data["message"] = "Группа '" + groupName + "' успешно создана!";
+                } else {
+                    responsePacket.type = PacketType::ERROR_RESPONSE;
+                    responsePacket.data["message"] = "Ошибка при создании группы.";
+                }
+            }
+
+
+
+        } else if (incomingPacket.type == PacketType::ADD_GROUP_MEMBER) {
+            int chatId = incomingPacket.data["chat_id"];
+            int requesterId = incomingPacket.data["requester_id"];
+            std::string targetUsername = incomingPacket.data["target_username"];
+
+            // Проверка 1: это групповой чат?
+            if (!DataBaseManager::getInstance().isGroupChat(chatId)) {
+                responsePacket.type = PacketType::ERROR_RESPONSE;
+                responsePacket.data["message"] = "Нельзя добавлять участников в личный чат.";
+            } else {
+                int targetId = DataBaseManager::getInstance().getUserIdByUsername(targetUsername);
+                
+                // Проверка 2: пользователь существует?
+                if (targetId == -1) {
+                    responsePacket.type = PacketType::ERROR_RESPONSE;
+                    responsePacket.data["message"] = "Пользователь '" + targetUsername + "' не найден.";
+                } else {
+                    // Проверка 3: пользователь ещё не в группе?
+                    auto members = DataBaseManager::getInstance().getChatMembers(chatId, -1); // -1 гарантированно не является реальным ID пользователя
+                    bool alreadyMember = false;
+                    for (int m : members) {
+                        if (m == targetId) {
+                            alreadyMember = true;
+                            break;
+                        }
+                    }
+                    
+                    if (alreadyMember) {
+                        responsePacket.type = PacketType::ERROR_RESPONSE;
+                        responsePacket.data["message"] = "Пользователь '" + targetUsername + "' уже в группе.";
+                    } else {
+                        bool added = DataBaseManager::getInstance().addChatMember(chatId, targetId);
+                        if (added) {
+                            responsePacket.type = PacketType::SUCCESS_RESPONSE;
+                            responsePacket.data["message"] = "Пользователь '" + targetUsername + "' добавлен в группу.";
+                        } else {
+                            responsePacket.type = PacketType::ERROR_RESPONSE;
+                            responsePacket.data["message"] = "Ошибка при добавлении участника.";
+                        }
+                    }
+                }
+            }
     
+
+
         } else if (incomingPacket.type == PacketType::SEND_MESSAGE) {
             int senderId = incomingPacket.data["sender_id"];
             int chatId = incomingPacket.data["chat_id"];
@@ -282,28 +352,27 @@ void Server::handleClient(int clientSocket) {
                 responsePacket.data["status"] = "OK";
                 responsePacket.data["message"] = "Сообщение сохранено";
 
-                // Пересылаем второму участнику, если он онлайн
-                int receiverId = DataBaseManager::getInstance().getOtherChatMember(chatId, senderId);
-                int receiverSocket = getOnlineUserSocket(receiverId);
-        
-                if (receiverSocket != -1) {
-                    // Получаем username отправителя
-                    std::string senderUsername = DataBaseManager::getInstance().getUsernameById(senderId);
+                // Получаем всех остальных участников (работает и для личных, и для групповых)
+                auto memberIds = DataBaseManager::getInstance().getChatMembers(chatId, senderId);
+                std::string senderUsername = DataBaseManager::getInstance().getUsernameById(senderId);
 
-                    Packet notifyPacket;
-                    notifyPacket.type = PacketType::NEW_MESSAGE;
-                    notifyPacket.data["sender_id"] = senderId;
-                    notifyPacket.data["sender_username"] = senderUsername;
-                    notifyPacket.data["chat_id"] = chatId;
-                    notifyPacket.data["message"] = text;
-            
-                    std::string notifyStr = notifyPacket.serialize();
-                    uint32_t notifySize = htonl(notifyStr.size());
-                    send(receiverSocket, &notifySize, sizeof(notifySize), 0);
-                    send(receiverSocket, notifyStr.c_str(), notifyStr.size(), 0);
-            
-                    Logger::getInstance().log("Уведомление о новом сообщении отправлено пользователю " + std::to_string(receiverId), LogLevel::DEBUG);
+                for (int memberId : memberIds) {
+                    int memberSocket = getOnlineUserSocket(memberId);
+                    if (memberSocket != -1) {
+                        Packet notifyPacket;
+                        notifyPacket.type = PacketType::NEW_MESSAGE;
+                        notifyPacket.data["sender_id"] = senderId;
+                        notifyPacket.data["sender_username"] = senderUsername;
+                        notifyPacket.data["chat_id"] = chatId;
+                        notifyPacket.data["message"] = text;
+
+                        std::string notifyStr = notifyPacket.serialize();
+                        uint32_t notifySize = htonl(notifyStr.size());
+                        send(memberSocket, &notifySize, sizeof(notifySize), 0);
+                        send(memberSocket, notifyStr.c_str(), notifyStr.size(), 0);
+                    }
                 }
+                Logger::getInstance().log("Уведомления о новом сообщении отправлены " + std::to_string(memberIds.size()) + " участникам.", LogLevel::DEBUG);
             } else {
                 responsePacket.type = PacketType::ERROR_RESPONSE;
                 responsePacket.data["message"] = "Ошибка БД при сохранении сообщения";
@@ -321,8 +390,9 @@ void Server::handleClient(int clientSocket) {
             json chatArray = json::array();
             for (const auto& chat : chats) {
                 chatArray.push_back({
-                    {"chat_id", chat.chatId}, 
-                    {"chat_name", chat.chatName}
+                    {"chat_id", chat.chatId},
+                    {"chat_name", chat.chatName},
+                    {"is_group", chat.isGroup}
                 });
             }
 
@@ -343,6 +413,7 @@ void Server::handleClient(int clientSocket) {
                 for (const auto& msg : history) {
                     historyArray.push_back({
                         {"sender_id", msg.senderId},
+                        {"sender_name", msg.senderName},
                         {"content", msg.content},
                         {"timestamp", msg.timestamp}
                     });

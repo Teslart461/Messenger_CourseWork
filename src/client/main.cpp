@@ -189,13 +189,15 @@ int main() {
                     for (const auto& chat : chats) {
                         int cid = chat["chat_id"];
                         std::string cname = chat["chat_name"];
+                        bool isGroup = chat.value("is_group", false);
 
                         { // Сохраняем имя чата в map для отображения в уведомлениях
                             std::lock_guard<std::mutex> lock(chatNamesMutex);
                             chatNamesMap[cid] = cname;
                         }   
 
-                        std::cout << optionNumber << ". " << cname << "\n";
+                        std::string prefix = isGroup ? "[ГРУППА] " : "";
+                        std::cout << optionNumber << ". " << prefix << cname << "\n";
 
                         chatIds.push_back(cid);
                         chatNames.push_back(cname);
@@ -209,6 +211,8 @@ int main() {
 
             std::cout << "\n" << optionNumber << ". Создать новый чат\n";
             int createChatOption = optionNumber++;
+            std::cout << optionNumber << ". Создать групповой чат\n";
+            int createGroupOption = optionNumber++;
             std::cout << optionNumber << ". Выйти из аккаунта\n";
             int logoutOption = optionNumber;
             std::cout << "0. Выйти из приложения\n\n";
@@ -249,7 +253,7 @@ int main() {
                 if (targetUsername.empty()) continue;
 
                 Packet createReq;
-                createReq.type = PacketType::CREATE_CHAT;
+                createReq.type = PacketType::CREATE_PERSONAL_CHAT;
                 createReq.data["sender_id"] = (int)myUserId;
                 createReq.data["target_username"] = targetUsername;
                 client.sendMessage(createReq.serialize());
@@ -268,6 +272,34 @@ int main() {
                     currentState = AppState::IN_CHAT;
                 } else {
                     std::cout << "Ошибка: " << createResp.data["message"].get<std::string>() << "\n";
+                    pressEnterToContinue();
+                }
+                continue;
+            }
+
+            if (choice == createGroupOption) {
+                std::string groupName;
+                std::cout << "Название группы: ";
+                std::getline(std::cin, groupName);
+                if (groupName.empty()) continue;
+
+                Packet createGroupReq;
+                createGroupReq.type = PacketType::CREATE_GROUP_CHAT;
+                createGroupReq.data["creator_id"] = (int)myUserId;
+                createGroupReq.data["group_name"] = groupName;
+                client.sendMessage(createGroupReq.serialize());
+
+                Packet createGroupResp = client.waitForResponse();
+                if (createGroupResp.type == PacketType::SUCCESS_RESPONSE) {
+                    myChatId = createGroupResp.data["chat_id"];
+                    currentChatName = groupName;
+                    {
+                        std::lock_guard<std::mutex> lock(chatNamesMutex);
+                        chatNamesMap[(int)myChatId] = groupName;
+                    }
+                    currentState = AppState::IN_CHAT;
+                } else {
+                    std::cout << "Ошибка: " << createGroupResp.data["message"].get<std::string>() << "\n";
                     pressEnterToContinue();
                 }
                 continue;
@@ -300,16 +332,17 @@ int main() {
                 if (!history.empty()) {
                     for (const auto& msg : history) {
                         int sender = msg["sender_id"];
+                        std::string senderName = msg.value("sender_name", "Unknown");
                         std::string text = msg["content"];
                         std::string time = msg["timestamp"];
-                        std::string author = (sender == myUserId) ? "Вы" : currentChatName;
+                        std::string author = (sender == myUserId) ? "Вы" : senderName;
                         std::cout << "[" << time << "] " << author << ": " << text << "\n";
                     }
                 }
             }
 
             std::cout << "\n----------------------------------------\n";
-            std::cout << "Введите сообщение ( /back — назад, /update — обновить )\n> ";
+            std::cout << "Введите сообщение ( /back — назад, /update — обновить, /add — добавить )\n> ";
 
             std::string text;
             std::getline(std::cin, text);
@@ -323,6 +356,25 @@ int main() {
 
             if (text == "/update") {
                 continue;  // Просто перерисуем историю
+            }
+
+            if (text == "/add") {
+                std::string targetUsername;
+                std::cout << "Логин пользователя для добавления: ";
+                std::getline(std::cin, targetUsername);
+                if (targetUsername.empty()) continue;
+
+                Packet addReq;
+                addReq.type = PacketType::ADD_GROUP_MEMBER;
+                addReq.data["chat_id"] = (int)myChatId;
+                addReq.data["requester_id"] = (int)myUserId;
+                addReq.data["target_username"] = targetUsername;
+                client.sendMessage(addReq.serialize());
+
+                Packet addResp = client.waitForResponse();
+                std::cout << addResp.data["message"].get<std::string>() << "\n";
+                pressEnterToContinue();
+                continue;
             }
 
             if (text.empty()) continue;

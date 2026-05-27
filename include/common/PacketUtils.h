@@ -22,11 +22,17 @@ inline std::string packetTypeToString(PacketType type) {
         case PacketType::LOGOUT:
             return "logout";
 
-        case PacketType::CREATE_CHAT:
-            return "create_chat";
+        case PacketType::CREATE_PERSONAL_CHAT:
+            return "create_personal_chat";
+
+        case PacketType::CREATE_GROUP_CHAT:
+            return "create_group_chat";
 
         case PacketType::SEND_MESSAGE:
             return "send_message";
+
+        case PacketType::ADD_GROUP_MEMBER:
+            return "add_group_member";
 
         case PacketType::NEW_MESSAGE:
             return "new_message";
@@ -71,12 +77,20 @@ inline PacketType stringToPacketType(const std::string& type) {
         return PacketType::LOGOUT;
     }
 
-    if (type == "create_chat") {
-        return PacketType::CREATE_CHAT;
+    if (type == "create_personal_chat") {
+        return PacketType::CREATE_PERSONAL_CHAT;
+    }
+
+    if (type == "create_group_chat") {
+        return PacketType::CREATE_GROUP_CHAT;
     }
 
     if (type == "send_message") {
         return PacketType::SEND_MESSAGE;
+    }
+
+    if (type == "add_group_member") {
+        return PacketType::ADD_GROUP_MEMBER;
     }
 
     if (type == "new_message") {
